@@ -243,6 +243,21 @@ def get_stale_branches(gl: gitlab.Gitlab, project_id: int, stale_days: int) -> l
     return stale_branches
 
 
+def _get_email_from_gitlab_object(obj: dict) -> str:
+    """
+    Extract email from a GitLab user object (assignee or author).
+
+    Args:
+        obj: GitLab user object dictionary
+
+    Returns:
+        Email address or empty string if not found
+    """
+    if isinstance(obj, dict):
+        return obj.get('email', '')
+    return ''
+
+
 def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
     """
     Get an open merge request for the given branch, if one exists.
@@ -265,11 +280,14 @@ def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
             # Get assignee email if available, otherwise use author
             assignee_email = ''
             author_email = ''
+            author_username = ''
 
             if hasattr(mr, 'assignee') and mr.assignee:
-                assignee_email = mr.assignee.get('email', '') if isinstance(mr.assignee, dict) else ''
+                assignee_email = _get_email_from_gitlab_object(mr.assignee)
             if hasattr(mr, 'author') and mr.author:
-                author_email = mr.author.get('email', '') if isinstance(mr.author, dict) else ''
+                author_email = _get_email_from_gitlab_object(mr.author)
+                if isinstance(mr.author, dict):
+                    author_username = mr.author.get('username', '')
 
             # Parse updated_at date for display
             updated_at = mr.updated_at
@@ -289,6 +307,7 @@ def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
                 'assignee_email': assignee_email,
                 'author_email': author_email,
                 'author_name': mr.author.get('name', 'Unknown') if hasattr(mr, 'author') and mr.author else 'Unknown',
+                'author_username': author_username,
                 'last_updated': last_updated,
             }
     except gitlab.exceptions.GitlabError as e:
@@ -393,22 +412,10 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
                     contact_email = mr_info.get('assignee_email') or mr_info.get('author_email', '')
 
                     # If no email from MR, try to get from username
-                    if not contact_email and mr_info.get('author_name'):
-                        # Try to lookup user by author info
-                        if hasattr(project.mergerequests.list(
-                            source_branch=branch['branch_name'],
-                            state='opened',
-                            per_page=1
-                        )[0], 'author'):
-                            mr_obj = project.mergerequests.list(
-                                source_branch=branch['branch_name'],
-                                state='opened',
-                                per_page=1
-                            )[0]
-                            if mr_obj.author:
-                                username = mr_obj.author.get('username', '')
-                                if username:
-                                    contact_email = get_user_email_by_username(gl, username)
+                    if not contact_email:
+                        author_username = mr_info.get('author_username', '')
+                        if author_username:
+                            contact_email = get_user_email_by_username(gl, author_username)
 
                     if not contact_email:
                         notification_email = fallback_email
