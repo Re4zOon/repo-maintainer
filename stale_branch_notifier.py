@@ -301,6 +301,11 @@ def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
             except ValueError:
                 last_updated = updated_at
 
+            # Get author name with consistent isinstance check
+            author_name = 'Unknown'
+            if hasattr(mr, 'author') and mr.author and isinstance(mr.author, dict):
+                author_name = mr.author.get('name', 'Unknown')
+
             return {
                 'iid': mr.iid,
                 'title': mr.title,
@@ -311,7 +316,7 @@ def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
                 'assignee_email': assignee_email,
                 'assignee_username': assignee_username,
                 'author_email': author_email,
-                'author_name': mr.author.get('name', 'Unknown') if hasattr(mr, 'author') and mr.author else 'Unknown',
+                'author_name': author_name,
                 'author_username': author_username,
                 'last_updated': last_updated,
                 'updated_at': updated_date,
