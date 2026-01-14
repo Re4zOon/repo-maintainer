@@ -1,0 +1,33 @@
+# GitLab Stale Branch Notifier Configuration
+# Copy this file to config.local.yaml and fill in your values
+
+# GitLab connection settings
+gitlab:
+  url: "https://gitlab.example.com"
+  private_token: "your-gitlab-private-token"
+
+# Project IDs to check for stale branches
+# You can find project IDs in GitLab under Project Settings > General
+projects:
+  - 123
+  - 456
+  - 789
+
+# Number of days after which a branch is considered stale
+stale_days: 30
+
+# Number of weeks until automatic cleanup (mentioned in notification)
+cleanup_weeks: 4
+
+# Fallback email address for inactive users
+# Notifications will be sent here if the committer's GitLab account is inactive
+fallback_email: "repo-maintainers@example.com"
+
+# SMTP server settings for sending emails
+smtp:
+  host: "smtp.example.com"
+  port: 587
+  use_tls: true
+  username: "notifications@example.com"
+  password: "your-smtp-password"
+  from_email: "GitLab Maintenance <notifications@example.com>"
