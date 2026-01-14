@@ -375,8 +375,9 @@ class TestCollectStaleBranchesByEmail(unittest.TestCase):
     """Tests for collect_stale_branches_by_email function."""
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
     @patch.object(stale_branch_notifier, 'get_notification_email')
-    def test_groups_branches_by_email(self, mock_get_email, mock_get_branches):
+    def test_groups_branches_by_email(self, mock_get_email, mock_get_mr, mock_get_branches):
         """Test that branches are grouped by email correctly."""
         mock_gl = MagicMock()
         mock_get_branches.return_value = [
@@ -391,6 +392,8 @@ class TestCollectStaleBranchesByEmail(unittest.TestCase):
                 'author_email': 'user2@example.com',
             },
         ]
+        # No merge requests for these branches
+        mock_get_mr.return_value = None
         mock_get_email.side_effect = lambda gl, email, fallback: email
 
         config = {
@@ -406,8 +409,9 @@ class TestCollectStaleBranchesByEmail(unittest.TestCase):
         self.assertIn('user2@example.com', result)
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
     @patch.object(stale_branch_notifier, 'get_notification_email')
-    def test_skips_branches_without_email_and_no_fallback(self, mock_get_email, mock_get_branches):
+    def test_skips_branches_without_email_and_no_fallback(self, mock_get_email, mock_get_mr, mock_get_branches):
         """Test that branches without email are skipped when no fallback is configured."""
         mock_gl = MagicMock()
         mock_get_branches.return_value = [
@@ -418,6 +422,8 @@ class TestCollectStaleBranchesByEmail(unittest.TestCase):
                 'author_email': '',
             },
         ]
+        # No merge requests for these branches
+        mock_get_mr.return_value = None
         # No fallback email configured
         mock_get_email.return_value = ''
 
@@ -431,6 +437,253 @@ class TestCollectStaleBranchesByEmail(unittest.TestCase):
 
         # Branch should be skipped
         self.assertEqual(len(result), 0)
+
+
+class TestGetMergeRequestForBranch(unittest.TestCase):
+    """Tests for get_merge_request_for_branch function."""
+
+    def test_returns_mr_info_when_mr_exists(self):
+        """Test that MR info is returned when an open MR exists for the branch."""
+        mock_project = MagicMock()
+        mock_project.id = 1
+        mock_project.name = 'Test Project'
+
+        mock_mr = MagicMock()
+        mock_mr.iid = 42
+        mock_mr.title = 'Fix feature'
+        mock_mr.web_url = 'https://gitlab.example.com/project/-/merge_requests/42'
+        mock_mr.updated_at = '2023-01-15T10:30:00Z'
+        mock_mr.author = {'name': 'Test User', 'email': 'test@example.com', 'username': 'testuser'}
+        mock_mr.assignee = None
+
+        mock_project.mergerequests.list.return_value = [mock_mr]
+
+        result = stale_branch_notifier.get_merge_request_for_branch(mock_project, 'feature-branch')
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result['iid'], 42)
+        self.assertEqual(result['title'], 'Fix feature')
+        self.assertEqual(result['branch_name'], 'feature-branch')
+        self.assertEqual(result['author_name'], 'Test User')
+
+    def test_returns_none_when_no_mr_exists(self):
+        """Test that None is returned when no open MR exists for the branch."""
+        mock_project = MagicMock()
+        mock_project.mergerequests.list.return_value = []
+
+        result = stale_branch_notifier.get_merge_request_for_branch(mock_project, 'orphan-branch')
+
+        self.assertIsNone(result)
+
+    def test_uses_assignee_email_when_available(self):
+        """Test that assignee email is used when available."""
+        mock_project = MagicMock()
+        mock_project.id = 1
+        mock_project.name = 'Test Project'
+
+        mock_mr = MagicMock()
+        mock_mr.iid = 42
+        mock_mr.title = 'Fix feature'
+        mock_mr.web_url = 'https://gitlab.example.com/project/-/merge_requests/42'
+        mock_mr.updated_at = '2023-01-15T10:30:00Z'
+        mock_mr.author = {'name': 'Author User', 'email': 'author@example.com', 'username': 'author'}
+        mock_mr.assignee = {'name': 'Assignee User', 'email': 'assignee@example.com', 'username': 'assignee'}
+
+        mock_project.mergerequests.list.return_value = [mock_mr]
+
+        result = stale_branch_notifier.get_merge_request_for_branch(mock_project, 'feature-branch')
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result['assignee_email'], 'assignee@example.com')
+        self.assertEqual(result['author_email'], 'author@example.com')
+
+
+class TestCollectStaleItemsByEmail(unittest.TestCase):
+    """Tests for collect_stale_items_by_email function."""
+
+    @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_notifier, 'get_notification_email')
+    def test_uses_mr_instead_of_branch_when_mr_exists(self, mock_get_email, mock_get_mr, mock_get_branches):
+        """Test that MR is used instead of branch when an open MR exists."""
+        mock_gl = MagicMock()
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'feature-branch',
+                'project_name': 'Test Project',
+                'committer_email': 'committer@example.com',
+                'author_email': 'committer@example.com',
+            },
+        ]
+        mock_get_mr.return_value = {
+            'iid': 42,
+            'title': 'Fix feature',
+            'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
+            'branch_name': 'feature-branch',
+            'project_id': 1,
+            'project_name': 'Test Project',
+            'assignee_email': '',
+            'author_email': 'mr-author@example.com',
+            'author_name': 'MR Author',
+            'last_updated': '2023-01-15 10:30:00',
+        }
+        mock_get_email.side_effect = lambda gl, email, fallback: email if email else fallback
+
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'fallback@example.com',
+            'projects': [1],
+        }
+
+        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+
+        # Should have MR, not branch
+        self.assertEqual(len(result), 1)
+        self.assertIn('mr-author@example.com', result)
+        items = result['mr-author@example.com']
+        self.assertEqual(len(items['merge_requests']), 1)
+        self.assertEqual(len(items['branches']), 0)
+        self.assertEqual(items['merge_requests'][0]['iid'], 42)
+
+    @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_notifier, 'get_notification_email')
+    def test_uses_assignee_email_for_mr_notification(self, mock_get_email, mock_get_mr, mock_get_branches):
+        """Test that MR assignee email is used for notification when available."""
+        mock_gl = MagicMock()
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'feature-branch',
+                'project_name': 'Test Project',
+                'committer_email': 'committer@example.com',
+                'author_email': 'committer@example.com',
+            },
+        ]
+        mock_get_mr.return_value = {
+            'iid': 42,
+            'title': 'Fix feature',
+            'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
+            'branch_name': 'feature-branch',
+            'project_id': 1,
+            'project_name': 'Test Project',
+            'assignee_email': 'assignee@example.com',
+            'author_email': 'author@example.com',
+            'author_name': 'MR Author',
+            'last_updated': '2023-01-15 10:30:00',
+        }
+        mock_get_email.side_effect = lambda gl, email, fallback: email if email else fallback
+
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'fallback@example.com',
+            'projects': [1],
+        }
+
+        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+
+        # Should use assignee email
+        self.assertEqual(len(result), 1)
+        self.assertIn('assignee@example.com', result)
+
+    @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_notifier, 'get_notification_email')
+    def test_uses_fallback_when_no_mr_email(self, mock_get_email, mock_get_mr, mock_get_branches):
+        """Test that fallback email is used when MR has no assignee or author email."""
+        mock_gl = MagicMock()
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'feature-branch',
+                'project_name': 'Test Project',
+                'committer_email': '',
+                'author_email': '',
+            },
+        ]
+        mock_get_mr.return_value = {
+            'iid': 42,
+            'title': 'Fix feature',
+            'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
+            'branch_name': 'feature-branch',
+            'project_id': 1,
+            'project_name': 'Test Project',
+            'assignee_email': '',
+            'author_email': '',
+            'author_name': 'Unknown',
+            'last_updated': '2023-01-15 10:30:00',
+        }
+        mock_get_email.side_effect = lambda gl, email, fallback: fallback
+
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'fallback@example.com',
+            'projects': [1],
+        }
+
+        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+
+        # Should use fallback email
+        self.assertEqual(len(result), 1)
+        self.assertIn('fallback@example.com', result)
+
+
+class TestGenerateEmailContentWithMRs(unittest.TestCase):
+    """Tests for generate_email_content with merge requests."""
+
+    def test_generates_html_with_merge_requests(self):
+        """Test that email content includes merge request information."""
+        branches = []
+        merge_requests = [
+            {
+                'project_name': 'Test Project',
+                'branch_name': 'feature-branch',
+                'iid': 42,
+                'title': 'Fix feature',
+                'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
+                'last_updated': '2023-01-15 10:00:00',
+                'author_name': 'Test User',
+            }
+        ]
+
+        result = stale_branch_notifier.generate_email_content(
+            branches, 30, 4, merge_requests
+        )
+
+        self.assertIn('Test Project', result)
+        self.assertIn('feature-branch', result)
+        self.assertIn('!42', result)
+        self.assertIn('Fix feature', result)
+        self.assertIn('Stale Merge Requests', result)
+
+    def test_generates_html_with_both_branches_and_mrs(self):
+        """Test email content with both branches and merge requests."""
+        branches = [
+            {
+                'project_name': 'Project 1',
+                'branch_name': 'old-branch',
+                'last_commit_date': '2023-01-10 10:00:00',
+                'author_name': 'User 1',
+            }
+        ]
+        merge_requests = [
+            {
+                'project_name': 'Project 2',
+                'branch_name': 'feature-branch',
+                'iid': 42,
+                'title': 'Fix feature',
+                'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
+                'last_updated': '2023-01-15 10:00:00',
+                'author_name': 'User 2',
+            }
+        ]
+
+        result = stale_branch_notifier.generate_email_content(
+            branches, 30, 4, merge_requests
+        )
+
+        self.assertIn('old-branch', result)
+        self.assertIn('Stale Branches', result)
+        self.assertIn('!42', result)
+        self.assertIn('Stale Merge Requests', result)
 
 
 if __name__ == '__main__':

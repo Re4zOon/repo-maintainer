@@ -1,14 +1,17 @@
-# GitLab Stale Branch Notifier
+# GitLab Stale Branch/Merge Request Notifier
 
-A Python script that identifies stale branches in GitLab projects and sends email notifications to their committers about upcoming cleanup.
+A Python script that identifies stale branches and merge requests in GitLab projects and sends email notifications to their owners about upcoming cleanup.
 
 ## Features
 
 - **Collect branches** from a list of GitLab projects
 - **Identify stale branches** where the last commit is older than a configurable number of days
+- **Detect open merge requests** for stale branches and notify about the MR instead of the branch
+- **Smart email routing for MRs** - uses MR assignee, author, or fallback email for notifications
 - **Check committer status** - verifies if the committer's GitLab profile is active
-- **Smart email routing** - uses fallback email if the committer's profile is inactive
+- **Smart email routing for branches** - uses fallback email if the committer's profile is inactive
 - **HTML email notifications** including:
+  - List of stale merge requests with project, MR link, and last update information
   - List of stale branches with project and commit information
   - Notification for cleanup action required
   - Warning about automatic cleanup after a configurable number of weeks
@@ -55,7 +58,7 @@ stale_days: 30
 # Number of weeks until automatic cleanup (mentioned in notification)
 cleanup_weeks: 4
 
-# Fallback email for inactive users
+# Fallback email for inactive users or when MR assignee/author cannot be identified
 fallback_email: "repo-maintainers@example.com"
 
 # SMTP settings
@@ -100,15 +103,18 @@ python stale_branch_notifier.py -v
 2. **Iterates through configured projects** and retrieves all branches
 3. **Filters out protected branches** (main, master, etc.)
 4. **Identifies stale branches** based on the last commit date
-5. **Groups branches by committer email**
-6. **Checks if committers are active** in GitLab
-7. **Sends notification emails** to active users, or to fallback email for inactive users
+5. **Checks for open merge requests** for each stale branch
+6. **For branches with MRs**: Groups by MR assignee/author email and sends MR notifications
+7. **For branches without MRs**: Groups by branch committer email
+8. **Checks if users are active** in GitLab
+9. **Sends notification emails** to active users, or to fallback email for inactive users
 
 ## Email Template
 
 The notification email includes:
+- List of stale merge requests with project name, MR link, source branch, and last update date
 - List of stale branches with project name, branch name, and last commit date
-- Instructions for handling the branches (merge, update, or delete)
+- Instructions for handling the items (merge, update, close, or delete)
 - Warning about automatic cleanup timeline
 
 ## Running Tests

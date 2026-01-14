@@ -1,4 +1,4 @@
-# GitLab Stale Branch Notifier Configuration
+# GitLab Stale Branch/Merge Request Notifier Configuration
 # Copy this file to config.local.yaml and fill in your values
 
 # GitLab connection settings
@@ -19,8 +19,10 @@ stale_days: 30
 # Number of weeks until automatic cleanup (mentioned in notification)
 cleanup_weeks: 4
 
-# Fallback email address for inactive users
-# Notifications will be sent here if the committer's GitLab account is inactive
+# Fallback email address for:
+# - Inactive users (committers whose GitLab accounts are inactive)
+# - Merge requests where assignee/author email cannot be determined
+# Notifications will be sent here as a fallback
 fallback_email: "repo-maintainers@example.com"
 
 # SMTP server settings for sending emails
