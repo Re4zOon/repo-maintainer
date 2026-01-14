@@ -279,23 +279,32 @@ def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
             mr = mrs[0]
             # Get assignee email if available, otherwise use author
             assignee_email = ''
+            assignee_username = ''
             author_email = ''
             author_username = ''
 
             if hasattr(mr, 'assignee') and mr.assignee:
                 assignee_email = _get_email_from_gitlab_object(mr.assignee)
+                if isinstance(mr.assignee, dict):
+                    assignee_username = mr.assignee.get('username', '')
             if hasattr(mr, 'author') and mr.author:
                 author_email = _get_email_from_gitlab_object(mr.author)
                 if isinstance(mr.author, dict):
                     author_username = mr.author.get('username', '')
 
-            # Parse updated_at date for display
+            # Parse updated_at date for display and staleness checking
             updated_at = mr.updated_at
+            updated_date = None
             try:
                 updated_date = parse_commit_date(updated_at)
                 last_updated = updated_date.strftime('%Y-%m-%d %H:%M:%S')
             except ValueError:
                 last_updated = updated_at
+
+            # Get author name with consistent isinstance check
+            author_name = 'Unknown'
+            if hasattr(mr, 'author') and mr.author and isinstance(mr.author, dict):
+                author_name = mr.author.get('name', 'Unknown')
 
             return {
                 'iid': mr.iid,
@@ -305,10 +314,12 @@ def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
                 'project_id': project.id,
                 'project_name': project.name,
                 'assignee_email': assignee_email,
+                'assignee_username': assignee_username,
                 'author_email': author_email,
-                'author_name': mr.author.get('name', 'Unknown') if hasattr(mr, 'author') and mr.author else 'Unknown',
+                'author_name': author_name,
                 'author_username': author_username,
                 'last_updated': last_updated,
+                'updated_at': updated_date,
             }
     except gitlab.exceptions.GitlabError as e:
         logger.warning(f"Error fetching merge requests for branch {branch_name}: {e}")
@@ -377,12 +388,58 @@ def get_notification_email(gl: gitlab.Gitlab, committer_email: str, fallback_ema
     return fallback_email
 
 
+def get_mr_notification_email(gl: gitlab.Gitlab, mr_info: dict, fallback_email: str) -> str:
+    """
+    Get the email address to use for MR notifications.
+
+    Follows the priority: Assignee → Author → Default (fallback).
+    At each step, checks if the user is active before using their email.
+
+    Args:
+        gl: Authenticated GitLab client
+        mr_info: Dictionary with MR information including assignee/author emails
+        fallback_email: Fallback email if no active user is found
+
+    Returns:
+        Email address to use for notification
+    """
+    # Try assignee first
+    assignee_email = mr_info.get('assignee_email', '')
+    if not assignee_email:
+        assignee_username = mr_info.get('assignee_username', '')
+        if assignee_username:
+            assignee_email = get_user_email_by_username(gl, assignee_username)
+
+    if assignee_email and is_user_active(gl, assignee_email):
+        return assignee_email
+
+    if assignee_email:
+        logger.info(f"MR assignee {assignee_email} is not active, trying author")
+
+    # Try author next
+    author_email = mr_info.get('author_email', '')
+    if not author_email:
+        author_username = mr_info.get('author_username', '')
+        if author_username:
+            author_email = get_user_email_by_username(gl, author_username)
+
+    if author_email and is_user_active(gl, author_email):
+        return author_email
+
+    if author_email:
+        logger.info(f"MR author {author_email} is not active, using fallback email")
+
+    # Fall back to default
+    return fallback_email
+
+
 def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     """
     Collect stale branches and merge requests from configured projects and group by email.
 
-    If a stale branch has an open merge request, the MR is used instead of the branch.
-    For MRs, the assignee or author email is used for notifications.
+    For branches with open MRs: checks if the MR is stale based on MR activity (updated_at).
+    For branches without MRs: checks if the branch is stale based on last commit date.
+    Notification priority for MRs: Assignee → Author → Default (with active user checks).
 
     Args:
         gl: Authenticated GitLab client
@@ -394,6 +451,7 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     stale_days = config.get('stale_days', 30)
     fallback_email = config.get('fallback_email', '')
     project_ids = config.get('projects', [])
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=stale_days)
 
     email_to_items = {}
     skipped_items = []
@@ -408,19 +466,17 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
                 mr_info = get_merge_request_for_branch(project, branch['branch_name'])
 
                 if mr_info:
-                    # Use MR assignee or author email
-                    contact_email = mr_info.get('assignee_email') or mr_info.get('author_email', '')
+                    # For MRs, check staleness based on MR activity (updated_at), not branch commit
+                    mr_updated_at = mr_info.get('updated_at')
+                    if mr_updated_at and mr_updated_at >= cutoff_date:
+                        # MR has recent activity, skip it (not stale)
+                        logger.debug(
+                            f"MR !{mr_info['iid']} has recent activity, skipping"
+                        )
+                        continue
 
-                    # If no email from MR, try to get from username
-                    if not contact_email:
-                        author_username = mr_info.get('author_username', '')
-                        if author_username:
-                            contact_email = get_user_email_by_username(gl, author_username)
-
-                    if not contact_email:
-                        notification_email = fallback_email
-                    else:
-                        notification_email = get_notification_email(gl, contact_email, fallback_email)
+                    # MR is stale - use priority: Assignee → Author → Default
+                    notification_email = get_mr_notification_email(gl, mr_info, fallback_email)
 
                     if notification_email:
                         if notification_email not in email_to_items:

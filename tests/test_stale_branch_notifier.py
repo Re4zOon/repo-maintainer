@@ -503,10 +503,12 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
     @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_notification_email')
-    def test_uses_mr_instead_of_branch_when_mr_exists(self, mock_get_email, mock_get_mr, mock_get_branches):
+    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    def test_uses_mr_instead_of_branch_when_mr_exists(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
         """Test that MR is used instead of branch when an open MR exists."""
         mock_gl = MagicMock()
+        # Use an old date to make the MR stale
+        old_date = datetime.now(timezone.utc) - timedelta(days=60)
         mock_get_branches.return_value = [
             {
                 'branch_name': 'feature-branch',
@@ -526,8 +528,9 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
             'author_email': 'mr-author@example.com',
             'author_name': 'MR Author',
             'last_updated': '2023-01-15 10:30:00',
+            'updated_at': old_date,
         }
-        mock_get_email.side_effect = lambda gl, email, fallback: email if email else fallback
+        mock_get_mr_email.return_value = 'mr-author@example.com'
 
         config = {
             'stale_days': 30,
@@ -547,10 +550,12 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
     @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_notification_email')
-    def test_uses_assignee_email_for_mr_notification(self, mock_get_email, mock_get_mr, mock_get_branches):
+    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    def test_uses_assignee_email_for_mr_notification(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
         """Test that MR assignee email is used for notification when available."""
         mock_gl = MagicMock()
+        # Use an old date to make the MR stale
+        old_date = datetime.now(timezone.utc) - timedelta(days=60)
         mock_get_branches.return_value = [
             {
                 'branch_name': 'feature-branch',
@@ -570,8 +575,9 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
             'author_email': 'author@example.com',
             'author_name': 'MR Author',
             'last_updated': '2023-01-15 10:30:00',
+            'updated_at': old_date,
         }
-        mock_get_email.side_effect = lambda gl, email, fallback: email if email else fallback
+        mock_get_mr_email.return_value = 'assignee@example.com'
 
         config = {
             'stale_days': 30,
@@ -587,10 +593,12 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
     @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_notification_email')
-    def test_uses_fallback_when_no_mr_email(self, mock_get_email, mock_get_mr, mock_get_branches):
+    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    def test_uses_fallback_when_no_mr_email(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
         """Test that fallback email is used when MR has no assignee or author email."""
         mock_gl = MagicMock()
+        # Use an old date to make the MR stale
+        old_date = datetime.now(timezone.utc) - timedelta(days=60)
         mock_get_branches.return_value = [
             {
                 'branch_name': 'feature-branch',
@@ -610,8 +618,9 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
             'author_email': '',
             'author_name': 'Unknown',
             'last_updated': '2023-01-15 10:30:00',
+            'updated_at': old_date,
         }
-        mock_get_email.side_effect = lambda gl, email, fallback: fallback
+        mock_get_mr_email.return_value = 'fallback@example.com'
 
         config = {
             'stale_days': 30,
@@ -684,6 +693,190 @@ class TestGenerateEmailContentWithMRs(unittest.TestCase):
         self.assertIn('Stale Branches', result)
         self.assertIn('!42', result)
         self.assertIn('Stale Merge Requests', result)
+
+
+class TestGetMrNotificationEmail(unittest.TestCase):
+    """Tests for get_mr_notification_email function."""
+
+    @patch.object(stale_branch_notifier, 'is_user_active')
+    def test_uses_active_assignee_email(self, mock_is_active):
+        """Test that active assignee email is used first."""
+        mock_is_active.return_value = True
+        mock_gl = MagicMock()
+        mr_info = {
+            'assignee_email': 'assignee@example.com',
+            'author_email': 'author@example.com',
+        }
+
+        result = stale_branch_notifier.get_mr_notification_email(
+            mock_gl, mr_info, 'fallback@example.com'
+        )
+
+        self.assertEqual(result, 'assignee@example.com')
+        mock_is_active.assert_called_once_with(mock_gl, 'assignee@example.com')
+
+    @patch.object(stale_branch_notifier, 'is_user_active')
+    def test_uses_author_email_when_assignee_inactive(self, mock_is_active):
+        """Test that author email is used when assignee is inactive."""
+        # First call for assignee returns False, second for author returns True
+        mock_is_active.side_effect = [False, True]
+        mock_gl = MagicMock()
+        mr_info = {
+            'assignee_email': 'assignee@example.com',
+            'author_email': 'author@example.com',
+        }
+
+        result = stale_branch_notifier.get_mr_notification_email(
+            mock_gl, mr_info, 'fallback@example.com'
+        )
+
+        self.assertEqual(result, 'author@example.com')
+        self.assertEqual(mock_is_active.call_count, 2)
+
+    @patch.object(stale_branch_notifier, 'is_user_active')
+    def test_uses_fallback_when_both_inactive(self, mock_is_active):
+        """Test that fallback email is used when both assignee and author are inactive."""
+        mock_is_active.return_value = False
+        mock_gl = MagicMock()
+        mr_info = {
+            'assignee_email': 'assignee@example.com',
+            'author_email': 'author@example.com',
+        }
+
+        result = stale_branch_notifier.get_mr_notification_email(
+            mock_gl, mr_info, 'fallback@example.com'
+        )
+
+        self.assertEqual(result, 'fallback@example.com')
+
+    @patch.object(stale_branch_notifier, 'is_user_active')
+    def test_skips_to_author_when_no_assignee(self, mock_is_active):
+        """Test that author is used when there's no assignee."""
+        mock_is_active.return_value = True
+        mock_gl = MagicMock()
+        mr_info = {
+            'assignee_email': '',
+            'author_email': 'author@example.com',
+        }
+
+        result = stale_branch_notifier.get_mr_notification_email(
+            mock_gl, mr_info, 'fallback@example.com'
+        )
+
+        self.assertEqual(result, 'author@example.com')
+        mock_is_active.assert_called_once_with(mock_gl, 'author@example.com')
+
+    @patch.object(stale_branch_notifier, 'is_user_active')
+    @patch.object(stale_branch_notifier, 'get_user_email_by_username')
+    def test_uses_username_to_get_assignee_email(self, mock_get_email, mock_is_active):
+        """Test that assignee username is used to get email when email is missing."""
+        mock_get_email.return_value = 'assignee@example.com'
+        mock_is_active.return_value = True
+        mock_gl = MagicMock()
+        mr_info = {
+            'assignee_email': '',
+            'assignee_username': 'assignee_user',
+            'author_email': 'author@example.com',
+        }
+
+        result = stale_branch_notifier.get_mr_notification_email(
+            mock_gl, mr_info, 'fallback@example.com'
+        )
+
+        self.assertEqual(result, 'assignee@example.com')
+        mock_get_email.assert_called_once_with(mock_gl, 'assignee_user')
+
+
+class TestMrStalenessChecking(unittest.TestCase):
+    """Tests for MR staleness checking based on MR activity."""
+
+    @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    def test_skips_mr_with_recent_activity(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
+        """Test that MR with recent activity is not considered stale."""
+        mock_gl = MagicMock()
+        # Use a recent date so the MR is NOT stale
+        recent_date = datetime.now(timezone.utc) - timedelta(days=5)
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'feature-branch',
+                'project_name': 'Test Project',
+                'committer_email': 'committer@example.com',
+                'author_email': 'committer@example.com',
+            },
+        ]
+        mock_get_mr.return_value = {
+            'iid': 42,
+            'title': 'Fix feature',
+            'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
+            'branch_name': 'feature-branch',
+            'project_id': 1,
+            'project_name': 'Test Project',
+            'assignee_email': 'assignee@example.com',
+            'author_email': 'author@example.com',
+            'author_name': 'MR Author',
+            'last_updated': '2023-01-15 10:30:00',
+            'updated_at': recent_date,  # Recent activity
+        }
+
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'fallback@example.com',
+            'projects': [1],
+        }
+
+        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+
+        # MR should be skipped because it has recent activity
+        self.assertEqual(len(result), 0)
+        # get_mr_notification_email should not be called since MR is not stale
+        mock_get_mr_email.assert_not_called()
+
+    @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    def test_includes_mr_with_old_activity(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
+        """Test that MR with old activity is considered stale."""
+        mock_gl = MagicMock()
+        # Use an old date so the MR IS stale
+        old_date = datetime.now(timezone.utc) - timedelta(days=60)
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'feature-branch',
+                'project_name': 'Test Project',
+                'committer_email': 'committer@example.com',
+                'author_email': 'committer@example.com',
+            },
+        ]
+        mock_get_mr.return_value = {
+            'iid': 42,
+            'title': 'Fix feature',
+            'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
+            'branch_name': 'feature-branch',
+            'project_id': 1,
+            'project_name': 'Test Project',
+            'assignee_email': 'assignee@example.com',
+            'author_email': 'author@example.com',
+            'author_name': 'MR Author',
+            'last_updated': '2023-01-15 10:30:00',
+            'updated_at': old_date,  # Old activity - stale
+        }
+        mock_get_mr_email.return_value = 'assignee@example.com'
+
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'fallback@example.com',
+            'projects': [1],
+        }
+
+        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+
+        # MR should be included because it's stale
+        self.assertEqual(len(result), 1)
+        self.assertIn('assignee@example.com', result)
+        items = result['assignee@example.com']
+        self.assertEqual(len(items['merge_requests']), 1)
 
 
 if __name__ == '__main__':
