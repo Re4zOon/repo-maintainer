@@ -161,10 +161,13 @@ stale-branch-check:
 
 | Document | Description |
 |----------|-------------|
+| [⚡ Quick Reference](docs/QUICK_REFERENCE.md) | **Start here!** Command cheat sheet and quick setup |
 | [📘 Setup Guide](docs/SETUP_GUIDE.md) | Step-by-step installation and configuration |
 | [📧 Email Notifications](docs/EMAIL_NOTIFICATIONS.md) | Email template, routing logic, and examples |
+| [📸 Screenshots & Examples](docs/SCREENSHOTS.md) | Visual examples and email preview |
 | [⚙️ Configuration Reference](docs/CONFIGURATION.md) | Complete config options and parameters |
 | [💻 Usage Examples](docs/USAGE_EXAMPLES.md) | Real-world scenarios and automation |
+| [🏗️ Architecture](docs/ARCHITECTURE.md) | Technical architecture and workflow |
 | [❓ FAQ](docs/FAQ.md) | Frequently asked questions |
 
 ### Quick Links

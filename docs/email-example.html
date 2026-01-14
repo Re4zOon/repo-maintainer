@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            line-height: 1.6; 
+            background-color: #f9f9f9;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            background-color: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .header { 
+            background: linear-gradient(135deg, #fc6d26 0%, #fca326 100%);
+            color: white; 
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .header .emoji {
+            font-size: 48px;
+            display: block;
+            margin-bottom: 10px;
+        }
+        .content { 
+            padding: 30px 20px; 
+        }
+        .greeting {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .intro {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .branch-list { 
+            background-color: #f8f9fa; 
+            padding: 20px; 
+            margin: 20px 0;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+        }
+        .branch-list h3 {
+            margin-top: 0;
+            color: #495057;
+            font-size: 18px;
+        }
+        .warning { 
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #d93025;
+            margin: 20px 0;
+        }
+        .warning strong {
+            display: block;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        .branch-item { 
+            margin: 10px 0;
+            padding: 10px;
+            background-color: white;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+        }
+        .mr-item { 
+            margin: 10px 0;
+            background-color: #d4edda;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #28a745;
+        }
+        .action-box {
+            background-color: #e7f3ff;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 6px;
+            border-left: 4px solid #2196F3;
+        }
+        .action-box h3 {
+            margin-top: 0;
+            color: #1976D2;
+        }
+        .action-box ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .action-box li {
+            margin: 8px 0;
+        }
+        .footer {
+            background-color: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            color: #6c757d;
+            font-size: 14px;
+            border-top: 1px solid #dee2e6;
+        }
+        .footer .fun-fact {
+            font-style: italic;
+            margin-top: 10px;
+            color: #495057;
+        }
+        code {
+            background-color: #f1f3f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        a {
+            color: #fc6d26;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .count-badge {
+            display: inline-block;
+            background-color: #fc6d26;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <span class="emoji">🧹</span>
+            <h1>Time for Some Spring Cleaning! ✨</h1>
+        </div>
+        <div class="content">
+            <div class="greeting">
+                <p>Hey there, Code Gardener! 👋</p>
+            </div>
+
+            <div class="intro">
+                <p><strong>🕰️ Whoops!</strong> It looks like some of your branches and merge requests have been gathering dust (over <strong>30 days</strong> of inactivity). Don't worry, we're not judging... much. 😉</p>
+            </div>
+
+            <div class="branch-list">
+                <h3>🔀 Merge Requests That Need Some Love <span class="count-badge">2</span></h3>
+                <p style="color: #6c757d; margin-bottom: 15px;">These MRs have been waiting patiently for your attention:</p>
+                
+                <div class="mr-item">
+                    <strong>📂 my-awesome-project</strong>
+                    <br>
+                    <a href="https://gitlab.example.com/project/merge_requests/42" style="color: #28a745; font-weight: bold;">!42 - Add new feature for user authentication</a>
+                    <br>
+                    <small style="color: #495057;">
+                        🌿 Branch: <code>feature/auth-system</code><br>
+                        🕒 Last updated: 2024-12-15 14:30:00 by Jane Doe
+                    </small>
+                </div>
+
+                <div class="mr-item">
+                    <strong>📂 backend-api</strong>
+                    <br>
+                    <a href="https://gitlab.example.com/backend/merge_requests/15" style="color: #28a745; font-weight: bold;">!15 - Fix memory leak in worker process</a>
+                    <br>
+                    <small style="color: #495057;">
+                        🌿 Branch: <code>bugfix/memory-leak</code><br>
+                        🕒 Last updated: 2024-12-10 09:15:00 by Jane Doe
+                    </small>
+                </div>
+            </div>
+
+            <div class="branch-list">
+                <h3>🌳 Lonely Branches <span class="count-badge">1</span></h3>
+                <p style="color: #6c757d; margin-bottom: 15px;">These branches are feeling a bit neglected:</p>
+                
+                <div class="branch-item">
+                    <strong>📂 frontend-app</strong>
+                    <br>
+                    <code style="font-weight: bold;">experimental/new-ui</code>
+                    <br>
+                    <small style="color: #6c757d;">
+                        🕒 Last commit: 2024-12-01 16:45:00 by Jane Doe
+                    </small>
+                </div>
+            </div>
+
+            <div class="action-box">
+                <h3>🎯 What Can You Do?</h3>
+                <p>Pick your adventure:</p>
+                <ul>
+                    <li>✅ <strong>Merge it</strong> - If the work is done, give it the green light!</li>
+                    <li>🔄 <strong>Update it</strong> - Still working on it? Push some fresh commits!</li>
+                    <li>❌ <strong>Close/Delete it</strong> - No longer needed? Let's declutter!</li>
+                </ul>
+            </div>
+
+            <div class="warning">
+                <strong>⏰ Tick-Tock Alert!</strong>
+                <p style="margin: 5px 0 0 0;">If these items continue hibernating, they'll be automatically cleaned up in <strong>4 weeks</strong>. No pressure, but... actually, yes, a little pressure. 😅</p>
+            </div>
+
+            <p style="color: #6c757d; margin-top: 30px;">
+                Questions? Concerns? Existential dread about your branches? Feel free to reach out to the repository maintainers—we're here to help!
+            </p>
+        </div>
+        <div class="footer">
+            <p><strong>Happy Coding! 🚀</strong></p>
+            <p>The GitLab Repository Maintenance Bot</p>
+            <p class="fun-fact">💡 Pro tip: A clean repository is a happy repository! (And it makes your teammates happy too!)</p>
+        </div>
+    </div>
+</body>
+</html>
