@@ -32,66 +32,223 @@ EMAIL_TEMPLATE = """
 <html>
 <head>
     <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; }
-        .header { background-color: #fc6d26; color: white; padding: 20px; }
-        .content { padding: 20px; }
-        .branch-list { background-color: #f5f5f5; padding: 15px; margin: 10px 0; }
-        .warning { color: #d93025; font-weight: bold; }
-        .branch-item { margin: 5px 0; }
-        .mr-item { margin: 5px 0; background-color: #e8f4e8; padding: 10px; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            line-height: 1.6; 
+            background-color: #f9f9f9;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 20px auto;
+            background-color: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .header { 
+            background: linear-gradient(135deg, #fc6d26 0%, #fca326 100%);
+            color: white; 
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .header .emoji {
+            font-size: 48px;
+            display: block;
+            margin-bottom: 10px;
+        }
+        .content { 
+            padding: 30px 20px; 
+        }
+        .greeting {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .intro {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .branch-list { 
+            background-color: #f8f9fa; 
+            padding: 20px; 
+            margin: 20px 0;
+            border-radius: 6px;
+            border: 1px solid #e9ecef;
+        }
+        .branch-list h3 {
+            margin-top: 0;
+            color: #495057;
+            font-size: 18px;
+        }
+        .warning { 
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #d93025;
+            margin: 20px 0;
+        }
+        .warning strong {
+            display: block;
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        .branch-item { 
+            margin: 10px 0;
+            padding: 10px;
+            background-color: white;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+        }
+        .mr-item { 
+            margin: 10px 0;
+            background-color: #d4edda;
+            padding: 15px;
+            border-radius: 4px;
+            border-left: 4px solid #28a745;
+        }
+        .action-box {
+            background-color: #e7f3ff;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 6px;
+            border-left: 4px solid #2196F3;
+        }
+        .action-box h3 {
+            margin-top: 0;
+            color: #1976D2;
+        }
+        .action-box ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .action-box li {
+            margin: 8px 0;
+        }
+        .footer {
+            background-color: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            color: #6c757d;
+            font-size: 14px;
+            border-top: 1px solid #dee2e6;
+        }
+        .footer .fun-fact {
+            font-style: italic;
+            margin-top: 10px;
+            color: #495057;
+        }
+        code {
+            background-color: #f1f3f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        a {
+            color: #fc6d26;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .count-badge {
+            display: inline-block;
+            background-color: #fc6d26;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>GitLab Branch Cleanup Notification</h1>
-    </div>
-    <div class="content">
-        <p>Hello,</p>
-
-        <p>The following items in our GitLab projects have been identified as stale
-        (no activity in the last {{ stale_days }} days) and require your attention:</p>
-
-        {% if merge_requests %}
-        <div class="branch-list">
-            <h3>Stale Merge Requests:</h3>
-            {% for mr in merge_requests %}
-            <div class="mr-item">
-                <strong>{{ mr.project_name }}</strong>: <a href="{{ mr.web_url }}">!{{ mr.iid }} - {{ mr.title }}</a>
-                <br>
-                <small>Source branch: <code>{{ mr.branch_name }}</code></small>
-                <br>
-                <small>Last updated: {{ mr.last_updated }} by {{ mr.author_name }}</small>
-            </div>
-            {% endfor %}
+    <div class="container">
+        <div class="header">
+            <span class="emoji">🧹</span>
+            <h1>Time for Some Spring Cleaning! ✨</h1>
         </div>
-        {% endif %}
-
-        {% if branches %}
-        <div class="branch-list">
-            <h3>Stale Branches:</h3>
-            {% for branch in branches %}
-            <div class="branch-item">
-                <strong>{{ branch.project_name }}</strong>: <code>{{ branch.branch_name }}</code>
-                <br>
-                <small>Last commit: {{ branch.last_commit_date }} by {{ branch.author_name }}</small>
+        <div class="content">
+            <div class="greeting">
+                <p>Hey there, Code Gardener! 👋</p>
             </div>
-            {% endfor %}
+
+            <div class="intro">
+                <p><strong>🕰️ Whoops!</strong> It looks like some of your branches and merge requests have been gathering dust (over <strong>{{ stale_days }} days</strong> of inactivity). Don't worry, we're not judging... much. 😉</p>
+            </div>
+
+            {% if merge_requests %}
+            <div class="branch-list">
+                <h3>🔀 Merge Requests That Need Some Love <span class="count-badge">{{ merge_requests|length }}</span></h3>
+                <p style="color: #6c757d; margin-bottom: 15px;">These MRs have been waiting patiently for your attention:</p>
+                {% for mr in merge_requests %}
+                <div class="mr-item">
+                    <strong>📂 {{ mr.project_name }}</strong>
+                    <br>
+                    <a href="{{ mr.web_url }}" style="color: #28a745; font-weight: bold;">!{{ mr.iid }} - {{ mr.title }}</a>
+                    <br>
+                    <small style="color: #495057;">
+                        🌿 Branch: <code>{{ mr.branch_name }}</code><br>
+                        🕒 Last updated: {{ mr.last_updated }} by {{ mr.author_name }}
+                    </small>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if branches %}
+            <div class="branch-list">
+                <h3>🌳 Lonely Branches <span class="count-badge">{{ branches|length }}</span></h3>
+                <p style="color: #6c757d; margin-bottom: 15px;">These branches are feeling a bit neglected:</p>
+                {% for branch in branches %}
+                <div class="branch-item">
+                    <strong>📂 {{ branch.project_name }}</strong>
+                    <br>
+                    <code style="font-weight: bold;">{{ branch.branch_name }}</code>
+                    <br>
+                    <small style="color: #6c757d;">
+                        🕒 Last commit: {{ branch.last_commit_date }} by {{ branch.author_name }}
+                    </small>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="action-box">
+                <h3>🎯 What Can You Do?</h3>
+                <p>Pick your adventure:</p>
+                <ul>
+                    <li>✅ <strong>Merge it</strong> - If the work is done, give it the green light!</li>
+                    <li>🔄 <strong>Update it</strong> - Still working on it? Push some fresh commits!</li>
+                    <li>❌ <strong>Close/Delete it</strong> - No longer needed? Let's declutter!</li>
+                </ul>
+            </div>
+
+            <div class="warning">
+                <strong>⏰ Tick-Tock Alert!</strong>
+                <p style="margin: 5px 0 0 0;">If these items continue hibernating, they'll be automatically cleaned up in <strong>{{ cleanup_weeks }} weeks</strong>. No pressure, but... actually, yes, a little pressure. 😅</p>
+            </div>
+
+            <p style="color: #6c757d; margin-top: 30px;">
+                Questions? Concerns? Existential dread about your branches? Feel free to reach out to the repository maintainers—we're here to help!
+            </p>
         </div>
-        {% endif %}
-
-        <p><strong>Action Required:</strong> Please review these items and either:</p>
-        <ul>
-            <li>Merge them if the work is complete</li>
-            <li>Update them with new commits if work is ongoing</li>
-            <li>Close/Delete them if they are no longer needed</li>
-        </ul>
-
-        <p class="warning">⚠️ Important: Items that remain inactive will be automatically
-        cleaned up after {{ cleanup_weeks }} weeks from this notification.</p>
-
-        <p>If you have any questions, please contact the repository maintainers.</p>
-
-        <p>Best regards,<br>GitLab Repository Maintenance Team</p>
+        <div class="footer">
+            <p><strong>Happy Coding! 🚀</strong></p>
+            <p>The GitLab Repository Maintenance Bot</p>
+            <p class="fun-fact">💡 Pro tip: A clean repository is a happy repository! (And it makes your teammates happy too!)</p>
+        </div>
     </div>
 </body>
 </html>

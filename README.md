@@ -1,134 +1,304 @@
 # GitLab Stale Branch/Merge Request Notifier
 
-A Python script that identifies stale branches and merge requests in GitLab projects and sends email notifications to their owners about upcoming cleanup.
+<div align="center">
 
-## Features
+🧹 **Keep your GitLab repositories clean and organized!** ✨
 
-- **Collect branches** from a list of GitLab projects
-- **Identify stale branches** where the last commit is older than a configurable number of days
-- **Detect open merge requests** for stale branches and notify about the MR instead of the branch
-- **Smart email routing for MRs** - uses MR assignee, author, or fallback email for notifications
-- **Check committer status** - verifies if the committer's GitLab profile is active
-- **Smart email routing for branches** - uses fallback email if the committer's profile is inactive
-- **HTML email notifications** including:
-  - List of stale merge requests with project, MR link, and last update information
-  - List of stale branches with project and commit information
-  - Notification for cleanup action required
-  - Warning about automatic cleanup after a configurable number of weeks
-- **Dry-run mode** for testing without sending emails
-- **Skips protected branches** to avoid notifying about main/master branches
+A friendly Python tool that identifies stale branches and merge requests in GitLab projects and sends beautiful, actionable email notifications to their owners.
 
-## Installation
+[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-1. Clone the repository:
+[Features](#features) • [Quick Start](#quick-start) • [Documentation](#documentation) • [Examples](#examples)
+
+</div>
+
+---
+
+## ✨ Features
+
+### 🔍 Smart Detection
+- **Automatic branch discovery** - Scans all non-protected branches across configured projects
+- **Intelligent staleness detection** - Identifies branches and MRs inactive for a configurable period
+- **MR-aware** - Detects open merge requests for stale branches and prioritizes MR notifications
+- **Protected branch filtering** - Automatically skips main/master and other protected branches
+
+### 📧 Beautiful Email Notifications
+- **Friendly, humorous tone** - Makes cleanup notifications less intimidating and more engaging
+- **Modern HTML design** - Beautiful, mobile-responsive emails with emojis and clear formatting
+- **Grouped notifications** - One email per developer with all their stale items
+- **Actionable guidance** - Clear instructions on what to do with stale items
+
+### 🎯 Smart Email Routing
+- **Priority-based routing for MRs** - Notifies assignee → author → fallback email
+- **Active user verification** - Checks if GitLab accounts are active before sending
+- **Fallback handling** - Routes notifications to team leads when users are inactive
+- **Configurable recipients** - Flexible email routing based on context
+
+### 🛡️ Safe & Reliable
+- **Read-only operations** - Never modifies, deletes, or closes anything in GitLab
+- **Dry-run mode** - Test configuration and preview notifications without sending emails
+- **Comprehensive logging** - Detailed output for debugging and monitoring
+- **Error handling** - Graceful handling of API errors and edge cases
+
+## 🚀 Quick Start
+
+### Installation
+
+1. **Clone the repository**:
    ```bash
    git clone https://github.com/Re4zOon/repo-maintainer.git
    cd repo-maintainer
    ```
 
-2. Install dependencies:
+2. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. Copy the example configuration and edit it:
+3. **Configure the tool**:
    ```bash
    cp config.yaml.example config.yaml
-   # Edit config.yaml with your settings
+   nano config.yaml  # Edit with your GitLab and SMTP settings
    ```
 
-## Configuration
+4. **Test your setup** (dry run - no emails sent):
+   ```bash
+   python stale_branch_notifier.py --dry-run -v
+   ```
 
-Create a `config.yaml` file with the following settings:
+5. **Send your first notifications**:
+   ```bash
+   python stale_branch_notifier.py
+   ```
+
+📚 **Need help?** Check out the [detailed Setup Guide](docs/SETUP_GUIDE.md) for step-by-step instructions.
+
+## ⚙️ Configuration
+
+### Basic Configuration
+
+Create a `config.yaml` file with your settings:
 
 ```yaml
-# GitLab connection settings
+# GitLab connection
 gitlab:
   url: "https://gitlab.example.com"
-  private_token: "your-gitlab-private-token"
+  private_token: "your-gitlab-private-token"  # Needs 'read_api' scope
 
-# Project IDs to check for stale branches
+# Projects to monitor (find ID in GitLab: Settings → General → Project ID)
 projects:
   - 123
   - 456
 
-# Number of days after which a branch is considered stale
+# Staleness threshold (days without activity)
 stale_days: 30
 
-# Number of weeks until automatic cleanup (mentioned in notification)
+# Cleanup timeline shown in notification (weeks)
 cleanup_weeks: 4
 
-# Fallback email for inactive users or when MR assignee/author cannot be identified
+# Fallback email for inactive users or when primary recipient unavailable
 fallback_email: "repo-maintainers@example.com"
 
-# SMTP settings
+# Email server settings
 smtp:
-  host: "smtp.example.com"
+  host: "smtp.gmail.com"  # or your SMTP server
   port: 587
   use_tls: true
   username: "notifications@example.com"
-  password: "your-smtp-password"
-  from_email: "GitLab Maintenance <notifications@example.com>"
+  password: "your-smtp-password"  # Use app password for Gmail
+  from_email: "GitLab Bot <notifications@example.com>"
 ```
 
-## Usage
+📖 **See the [Configuration Reference](docs/CONFIGURATION.md)** for all available options and detailed explanations.
 
-### Basic Usage
+## 💡 Usage
+
+### Common Commands
 
 ```bash
+# Standard run - send notifications
 python stale_branch_notifier.py
-```
 
-### With Custom Configuration File
+# Test without sending emails (recommended first!)
+python stale_branch_notifier.py --dry-run
 
-```bash
+# Verbose output for debugging
+python stale_branch_notifier.py -v
+
+# Dry run with detailed logging
+python stale_branch_notifier.py --dry-run -v
+
+# Use custom configuration file
 python stale_branch_notifier.py -c /path/to/config.yaml
 ```
 
-### Dry Run (No Emails Sent)
+### Automation
 
+**Schedule weekly notifications** (cron example):
 ```bash
-python stale_branch_notifier.py --dry-run
+# Every Monday at 9 AM
+0 9 * * 1 cd /path/to/repo-maintainer && python stale_branch_notifier.py
 ```
 
-### Verbose Output
-
-```bash
-python stale_branch_notifier.py -v
+**GitLab CI/CD** (.gitlab-ci.yml):
+```yaml
+stale-branch-check:
+  image: python:3.9
+  before_script:
+    - pip install -r requirements.txt
+  script:
+    - python stale_branch_notifier.py
+  only:
+    - schedules
 ```
 
-## How It Works
+📚 **More examples**: See [Usage Examples](docs/USAGE_EXAMPLES.md) for automation, Docker, and advanced scenarios.
 
-1. **Connects to GitLab** using the provided API token
-2. **Iterates through configured projects** and retrieves all branches
-3. **Filters out protected branches** (main, master, etc.)
-4. **Identifies stale branches** based on the last commit date
-5. **Checks for open merge requests** for each stale branch
-6. **For branches with MRs**: Groups by MR assignee/author email and sends MR notifications
-7. **For branches without MRs**: Groups by branch committer email
-8. **Checks if users are active** in GitLab
-9. **Sends notification emails** to active users, or to fallback email for inactive users
+## 📋 Documentation
 
-## Email Template
+### Complete Guides
 
-The notification email includes:
-- List of stale merge requests with project name, MR link, source branch, and last update date
-- List of stale branches with project name, branch name, and last commit date
-- Instructions for handling the items (merge, update, close, or delete)
-- Warning about automatic cleanup timeline
+| Document | Description |
+|----------|-------------|
+| [📘 Setup Guide](docs/SETUP_GUIDE.md) | Step-by-step installation and configuration |
+| [📧 Email Notifications](docs/EMAIL_NOTIFICATIONS.md) | Email template, routing logic, and examples |
+| [⚙️ Configuration Reference](docs/CONFIGURATION.md) | Complete config options and parameters |
+| [💻 Usage Examples](docs/USAGE_EXAMPLES.md) | Real-world scenarios and automation |
+| [❓ FAQ](docs/FAQ.md) | Frequently asked questions |
 
-## Running Tests
+### Quick Links
+
+- [How to get GitLab token](docs/SETUP_GUIDE.md#step-1-create-a-gitlab-access-token)
+- [SMTP configuration examples](docs/SETUP_GUIDE.md#smtp-configuration)
+- [Email routing explanation](docs/EMAIL_NOTIFICATIONS.md#notification-routing-logic)
+- [Customizing emails](docs/EMAIL_NOTIFICATIONS.md#customizing-emails)
+- [Automation with cron/CI](docs/USAGE_EXAMPLES.md#automation)
+- [Troubleshooting common issues](docs/SETUP_GUIDE.md#troubleshooting)
+
+## 📸 Examples
+
+### Email Notification Preview
+
+Developers receive beautiful, actionable emails like this:
+
+```
+┌─────────────────────────────────────────────┐
+│  🧹 Time for Some Spring Cleaning! ✨       │
+└─────────────────────────────────────────────┘
+
+Hey there, Code Gardener! 👋
+
+🕰️ Whoops! It looks like some of your branches 
+have been gathering dust...
+
+🔀 Merge Requests That Need Some Love [2]
+  📂 my-project: !42 - Add authentication
+  🌿 Branch: feature/auth-system
+  🕒 Last updated: 2024-01-01 by Jane Doe
+
+🌳 Lonely Branches [1]
+  📂 frontend: experimental/new-ui
+  🕒 Last commit: 2023-12-15 by Jane Doe
+
+🎯 What Can You Do?
+  ✅ Merge it - Work is done!
+  🔄 Update it - Still working on it?
+  ❌ Close/Delete it - No longer needed?
+
+⏰ Tick-Tock Alert!
+Items that remain inactive will be cleaned up
+in 4 weeks. No pressure... actually, yes,
+a little pressure. 😅
+```
+
+See the full [Email Notifications Guide](docs/EMAIL_NOTIFICATIONS.md) for more details.
+
+## 🔄 How It Works
+
+```
+1. Connect to GitLab
+   └─► Authenticate with API token
+   
+2. Scan Projects
+   └─► Fetch all branches from configured projects
+   
+3. Filter Branches
+   ├─► Skip protected branches (main, master, etc.)
+   └─► Check last commit/update date
+   
+4. Detect Staleness
+   ├─► For branches: Check last commit age
+   └─► For MRs: Check last update time
+   
+5. Route Notifications
+   ├─► MR with assignee → Send to assignee
+   ├─► MR without assignee → Send to author
+   ├─► Branch only → Send to last committer
+   └─► User inactive → Send to fallback email
+   
+6. Send Emails
+   ├─► Group all items by recipient
+   ├─► Generate beautiful HTML email
+   └─► Send via SMTP
+```
+
+## 🧪 Running Tests
 
 ```bash
+# Run all tests
 python -m unittest discover tests/ -v
+
+# Run specific test
+python -m unittest tests.test_stale_branch_notifier -v
 ```
 
-## Requirements
+## 📋 Requirements
 
-- Python 3.7+
-- GitLab API access (private token with `read_api` scope)
-- SMTP server for sending emails
+- **Python**: 3.7 or higher
+- **GitLab Access**: Private token with `read_api` scope
+- **SMTP Server**: For sending email notifications (Gmail, Office 365, etc.)
+- **Dependencies**: Listed in `requirements.txt`
+  - `python-gitlab >= 3.15.0`
+  - `pyyaml >= 6.0`
+  - `jinja2 >= 3.1.2`
 
-## License
+## 🤝 Contributing
 
-MIT License
+Contributions are welcome! Here's how you can help:
+
+1. 🐛 **Report bugs** - Open an issue with details
+2. 💡 **Suggest features** - Share your ideas
+3. 📝 **Improve docs** - Help make guides better
+4. 🔧 **Submit PRs** - Fix bugs or add features
+
+Please ensure your code:
+- Follows existing style conventions
+- Includes tests for new features
+- Updates documentation as needed
+
+## 📜 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built with [python-gitlab](https://github.com/python-gitlab/python-gitlab)
+- Email templating by [Jinja2](https://jinja.palletsprojects.com/)
+- Inspired by the need for cleaner repositories everywhere! 🧹
+
+## 💬 Support
+
+- 📖 **Documentation**: Check the [docs](docs/) folder
+- 🐛 **Issues**: [GitHub Issues](https://github.com/Re4zOon/repo-maintainer/issues)
+- ❓ **Questions**: See [FAQ](docs/FAQ.md)
+
+---
+
+<div align="center">
+
+**Made with ❤️ for cleaner repositories**
+
+⭐ Star this repo if you find it helpful!
+
+</div>

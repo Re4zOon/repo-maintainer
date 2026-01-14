@@ -661,7 +661,7 @@ class TestGenerateEmailContentWithMRs(unittest.TestCase):
         self.assertIn('feature-branch', result)
         self.assertIn('!42', result)
         self.assertIn('Fix feature', result)
-        self.assertIn('Stale Merge Requests', result)
+        self.assertIn('Merge Requests That Need Some Love', result)
 
     def test_generates_html_with_both_branches_and_mrs(self):
         """Test email content with both branches and merge requests."""
@@ -690,9 +690,9 @@ class TestGenerateEmailContentWithMRs(unittest.TestCase):
         )
 
         self.assertIn('old-branch', result)
-        self.assertIn('Stale Branches', result)
+        self.assertIn('Lonely Branches', result)
         self.assertIn('!42', result)
-        self.assertIn('Stale Merge Requests', result)
+        self.assertIn('Merge Requests That Need Some Love', result)
 
 
 class TestGetMrNotificationEmail(unittest.TestCase):
