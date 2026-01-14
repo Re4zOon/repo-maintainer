@@ -5,6 +5,103 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import stale_branch_notifier
+from stale_branch_notifier import ConfigurationError
+
+
+class TestValidateConfig(unittest.TestCase):
+    """Tests for validate_config function."""
+
+    def test_valid_config(self):
+        """Test that valid config passes validation."""
+        config = {
+            'gitlab': {
+                'url': 'https://gitlab.example.com',
+                'private_token': 'token123',
+            },
+            'smtp': {
+                'host': 'smtp.example.com',
+                'port': 587,
+                'from_email': 'test@example.com',
+            },
+            'projects': [1, 2],
+            'fallback_email': 'fallback@example.com',
+        }
+        # Should not raise
+        stale_branch_notifier.validate_config(config)
+
+    def test_empty_config(self):
+        """Test that empty config raises error."""
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_notifier.validate_config({})
+        self.assertIn('empty', str(ctx.exception).lower())
+
+    def test_missing_gitlab_section(self):
+        """Test that missing gitlab section raises error."""
+        config = {
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': [1],
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_notifier.validate_config(config)
+        self.assertIn('gitlab', str(ctx.exception).lower())
+
+    def test_missing_gitlab_url(self):
+        """Test that missing gitlab url raises error."""
+        config = {
+            'gitlab': {'private_token': 'token'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': [1],
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_notifier.validate_config(config)
+        self.assertIn('url', str(ctx.exception).lower())
+
+    def test_missing_smtp_section(self):
+        """Test that missing smtp section raises error."""
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'projects': [1],
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_notifier.validate_config(config)
+        self.assertIn('smtp', str(ctx.exception).lower())
+
+    def test_missing_projects(self):
+        """Test that missing projects raises error."""
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_notifier.validate_config(config)
+        self.assertIn('projects', str(ctx.exception).lower())
+
+
+class TestParseDateCommit(unittest.TestCase):
+    """Tests for parse_commit_date function."""
+
+    def test_parse_z_suffix(self):
+        """Test parsing date with Z suffix."""
+        result = stale_branch_notifier.parse_commit_date('2023-01-15T10:30:00Z')
+        self.assertEqual(result.year, 2023)
+        self.assertEqual(result.month, 1)
+        self.assertEqual(result.day, 15)
+
+    def test_parse_with_offset(self):
+        """Test parsing date with timezone offset."""
+        result = stale_branch_notifier.parse_commit_date('2023-01-15T10:30:00+02:00')
+        self.assertEqual(result.year, 2023)
+        self.assertEqual(result.hour, 10)
+
+    def test_parse_with_microseconds(self):
+        """Test parsing date with microseconds."""
+        result = stale_branch_notifier.parse_commit_date('2023-01-15T10:30:00.123456+00:00')
+        self.assertEqual(result.year, 2023)
+
+    def test_parse_invalid_format(self):
+        """Test that invalid format raises ValueError."""
+        with self.assertRaises(ValueError):
+            stale_branch_notifier.parse_commit_date('not-a-date')
 
 
 class TestLoadConfig(unittest.TestCase):
@@ -12,14 +109,20 @@ class TestLoadConfig(unittest.TestCase):
 
     @patch('builtins.open')
     @patch('yaml.safe_load')
-    def test_load_config_success(self, mock_yaml_load, mock_open):
+    @patch.object(stale_branch_notifier, 'validate_config')
+    def test_load_config_success(self, mock_validate, mock_yaml_load, mock_open):
         """Test successful config loading."""
-        expected_config = {'gitlab': {'url': 'https://gitlab.example.com'}}
+        expected_config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': [1],
+        }
         mock_yaml_load.return_value = expected_config
 
         result = stale_branch_notifier.load_config('config.yaml')
 
         self.assertEqual(result, expected_config)
+        mock_validate.assert_called_once_with(expected_config)
 
     def test_load_config_file_not_found(self):
         """Test config loading with missing file."""
@@ -301,6 +404,33 @@ class TestCollectStaleBranchesByEmail(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertIn('user1@example.com', result)
         self.assertIn('user2@example.com', result)
+
+    @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_notification_email')
+    def test_skips_branches_without_email_and_no_fallback(self, mock_get_email, mock_get_branches):
+        """Test that branches without email are skipped when no fallback is configured."""
+        mock_gl = MagicMock()
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'orphan-branch',
+                'project_name': 'Test Project',
+                'committer_email': '',
+                'author_email': '',
+            },
+        ]
+        # No fallback email configured
+        mock_get_email.return_value = ''
+
+        config = {
+            'stale_days': 30,
+            'fallback_email': '',  # No fallback
+            'projects': [1],
+        }
+
+        result = stale_branch_notifier.collect_stale_branches_by_email(mock_gl, config)
+
+        # Branch should be skipped
+        self.assertEqual(len(result), 0)
 
 
 if __name__ == '__main__':

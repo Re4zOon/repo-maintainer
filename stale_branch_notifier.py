@@ -79,10 +79,55 @@ EMAIL_TEMPLATE = """
 """
 
 
+class ConfigurationError(Exception):
+    """Raised when configuration is invalid or missing required fields."""
+
+
+def validate_config(config: dict) -> None:
+    """
+    Validate that all required configuration keys are present.
+
+    Args:
+        config: Configuration dictionary to validate
+
+    Raises:
+        ConfigurationError: If required keys are missing
+    """
+    required_gitlab_keys = ['url', 'private_token']
+    required_smtp_keys = ['host', 'port', 'from_email']
+
+    if not config:
+        raise ConfigurationError("Configuration is empty")
+
+    if 'gitlab' not in config:
+        raise ConfigurationError("Missing 'gitlab' section in configuration")
+
+    for key in required_gitlab_keys:
+        if key not in config['gitlab']:
+            raise ConfigurationError(f"Missing required GitLab config key: '{key}'")
+
+    if 'smtp' not in config:
+        raise ConfigurationError("Missing 'smtp' section in configuration")
+
+    for key in required_smtp_keys:
+        if key not in config['smtp']:
+            raise ConfigurationError(f"Missing required SMTP config key: '{key}'")
+
+    if not config.get('projects'):
+        raise ConfigurationError("No projects configured. Add project IDs to 'projects' list.")
+
+    if not config.get('fallback_email'):
+        logger.warning(
+            "No fallback_email configured. Branches from inactive users will be skipped."
+        )
+
+
 def load_config(config_path: str) -> dict:
-    """Load configuration from a YAML file."""
+    """Load and validate configuration from a YAML file."""
     with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    validate_config(config)
+    return config
 
 
 def create_gitlab_client(config: dict) -> gitlab.Gitlab:
@@ -93,6 +138,42 @@ def create_gitlab_client(config: dict) -> gitlab.Gitlab:
     )
     gl.auth()
     return gl
+
+
+def parse_commit_date(date_str: str) -> datetime:
+    """
+    Parse a commit date string into a datetime object.
+
+    Handles various ISO 8601 formats that GitLab might return.
+
+    Args:
+        date_str: Date string in ISO 8601 format
+
+    Returns:
+        datetime object with timezone info
+
+    Raises:
+        ValueError: If the date cannot be parsed
+    """
+    # Handle 'Z' suffix (UTC)
+    if date_str.endswith('Z'):
+        date_str = date_str[:-1] + '+00:00'
+
+    try:
+        return datetime.fromisoformat(date_str)
+    except ValueError:
+        # Try parsing without microseconds
+        formats = [
+            '%Y-%m-%dT%H:%M:%S%z',
+            '%Y-%m-%dT%H:%M:%S.%f%z',
+            '%Y-%m-%d %H:%M:%S%z',
+        ]
+        for fmt in formats:
+            try:
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"Unable to parse date: {date_str}")
 
 
 def get_stale_branches(gl: gitlab.Gitlab, project_id: int, stale_days: int) -> list:
@@ -120,7 +201,14 @@ def get_stale_branches(gl: gitlab.Gitlab, project_id: int, stale_days: int) -> l
 
         commit = branch.commit
         commit_date_str = commit['committed_date']
-        commit_date = datetime.fromisoformat(commit_date_str.replace('Z', '+00:00'))
+
+        try:
+            commit_date = parse_commit_date(commit_date_str)
+        except ValueError as e:
+            logger.warning(
+                f"Could not parse commit date for branch {branch.name}: {e}. Skipping."
+            )
+            continue
 
         if commit_date < cutoff_date:
             stale_branches.append({
@@ -192,6 +280,7 @@ def collect_stale_branches_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     project_ids = config.get('projects', [])
 
     email_to_branches = {}
+    skipped_branches = []
 
     for project_id in project_ids:
         try:
@@ -207,9 +296,23 @@ def collect_stale_branches_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
                     if notification_email not in email_to_branches:
                         email_to_branches[notification_email] = []
                     email_to_branches[notification_email].append(branch)
+                else:
+                    skipped_branches.append(branch)
+                    logger.warning(
+                        f"No notification email available for stale branch "
+                        f"'{branch['branch_name']}' in project '{branch['project_name']}'. "
+                        f"Original committer: {committer_email or 'unknown'}. "
+                        f"Configure 'fallback_email' to avoid missing notifications."
+                    )
 
         except gitlab.exceptions.GitlabGetError as e:
             logger.error(f"Failed to get project {project_id}: {e}")
+
+    if skipped_branches:
+        logger.warning(
+            f"Total of {len(skipped_branches)} stale branch(es) skipped due to "
+            f"missing notification email. Configure 'fallback_email' to receive notifications."
+        )
 
     return email_to_branches
 
@@ -361,6 +464,9 @@ def main() -> Optional[int]:
         return 1
     except yaml.YAMLError as e:
         logger.error(f"Invalid YAML in configuration file: {e}")
+        return 1
+    except ConfigurationError as e:
+        logger.error(f"Configuration error: {e}")
         return 1
 
     summary = notify_stale_branches(config, dry_run=args.dry_run)
