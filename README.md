@@ -100,6 +100,60 @@ python stale_branch_mr_handler.py --dry-run
 python stale_branch_mr_handler.py -v
 ```
 
+## Docker Deployment
+
+### Quick Start with Docker Compose
+
+1. Copy the example configuration:
+   ```bash
+   cp config.yaml.example config.yaml
+   # Edit config.yaml with your settings
+   ```
+
+2. Create a data directory for the notification database:
+   ```bash
+   mkdir -p data
+   ```
+
+3. Run the container:
+   ```bash
+   docker compose up --build
+   ```
+
+### Run with Dry Run Mode
+
+```bash
+docker compose run --rm repo-maintainer python stale_branch_mr_handler.py -c /app/data/config.yaml --dry-run
+```
+
+### Run with Verbose Output
+
+```bash
+docker compose run --rm repo-maintainer python stale_branch_mr_handler.py -c /app/data/config.yaml -v
+```
+
+### Scheduled Execution with Cron
+
+To run the notifier on a schedule (e.g., daily), add a cron job on your host:
+
+```bash
+# Run daily at 9:00 AM
+0 9 * * * cd /path/to/repo-maintainer && docker compose up --build
+```
+
+### Build and Run Manually with Docker
+
+```bash
+# Build the image
+docker build -t repo-maintainer .
+
+# Run the container
+docker run --rm \
+  -v $(pwd)/config.yaml:/app/data/config.yaml:ro \
+  -v $(pwd)/data:/app/data \
+  repo-maintainer
+```
+
 ## How It Works
 
 1. **Connects to GitLab** using the provided API token
