@@ -31,6 +31,7 @@ EMAIL_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="utf-8">
     <style>
         body { font-family: Arial, sans-serif; line-height: 1.6; }
         .header { background-color: #fc6d26; color: white; padding: 20px; }
@@ -48,8 +49,8 @@ EMAIL_TEMPLATE = """
     <div class="content">
         <p>Hello,</p>
 
-        <p>The following items in our GitLab projects have been identified as stale
-        (no activity in the last {{ stale_days }} days) and require your attention:</p>
+        <p>This is your friendly nudge from the cleanup bot 🤖. The following items in our
+        GitLab projects have been snoozing for {{ stale_days }} days and could use a check-in:</p>
 
         {% if merge_requests %}
         <div class="branch-list">
@@ -87,11 +88,14 @@ EMAIL_TEMPLATE = """
         </ul>
 
         <p class="warning">⚠️ Important: Items that remain inactive will be automatically
-        cleaned up after {{ cleanup_weeks }} weeks from this notification.</p>
+        cleaned up after {{ cleanup_weeks }} weeks from this notification. The tidy-up bot
+        is punctual and does not accept bribes (it runs on cron).</p>
 
         <p>If you have any questions, please contact the repository maintainers.</p>
 
-        <p>Best regards,<br>GitLab Repository Maintenance Team</p>
+        <p>Thanks for keeping things tidy — your future self will thank you.</p>
+
+        <p>Best regards,<br>GitLab Repository Maintenance Team 🧹</p>
     </div>
 </body>
 </html>

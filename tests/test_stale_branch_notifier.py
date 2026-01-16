@@ -295,6 +295,7 @@ class TestGenerateEmailContent(unittest.TestCase):
         self.assertIn('Test User', result)
         self.assertIn('30 days', result)
         self.assertIn('4 weeks', result)
+        self.assertIn('cleanup bot', result)
 
     def test_generates_html_with_multiple_branches(self):
         """Test email content with multiple branches."""

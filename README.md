@@ -117,6 +117,36 @@ The notification email includes:
 - Instructions for handling the items (merge, update, close, or delete)
 - Warning about automatic cleanup timeline
 
+The template also includes a friendly reminder from the cleanup bot to keep the tone light.
+
+### Email Notification Preview
+
+Example subject lines:
+- `[Action Required] 3 Stale Item(s) Require Attention`
+- `[Action Required] 1 Stale Merge Request(s) Require Attention`
+- `[Action Required] 2 Stale Branch(es) Require Attention`
+
+Example email excerpt (MRs + branches):
+
+```
+Hello,
+This is your friendly nudge from the cleanup bot 🤖. The following items have been snoozing
+for 30 days and could use a check-in:
+
+Stale Merge Requests:
+- Payments API: !42 - Add retry logic (source branch: retry-payments, last updated 2024-02-12 by Priya)
+
+Stale Branches:
+- Mobile App: feature/dark-mode (last commit 2023-12-18 by Sam)
+
+⚠️ Important: Items that remain inactive will be automatically cleaned up after 4 weeks.
+```
+
+![Example notification email](docs/images/email-notification.png)
+
+To customize the notification layout or wording, edit `EMAIL_TEMPLATE` in
+`stale_branch_notifier.py`.
+
 ## Running Tests
 
 ```bash
