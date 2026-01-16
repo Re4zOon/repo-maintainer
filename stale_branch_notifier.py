@@ -9,7 +9,9 @@ If a merge request exists for a stale branch, it notifies about the MR instead.
 
 import argparse
 import logging
+import os
 import smtplib
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -101,9 +103,270 @@ EMAIL_TEMPLATE = """
 </html>
 """
 
+# Default configuration values for notification throttling
+DEFAULT_NOTIFICATION_FREQUENCY_DAYS = 7
+DEFAULT_DATABASE_PATH = "./notification_history.db"
+
 
 class ConfigurationError(Exception):
     """Raised when configuration is invalid or missing required fields."""
+
+
+def init_database(db_path: str) -> None:
+    """
+    Initialize the SQLite database for notification tracking.
+
+    Creates the database and tables if they don't exist.
+
+    Args:
+        db_path: Path to the SQLite database file
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS notification_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recipient_email TEXT NOT NULL,
+            item_type TEXT NOT NULL,
+            project_id INTEGER NOT NULL,
+            item_key TEXT NOT NULL,
+            first_found_at DATETIME NOT NULL,
+            last_notified_at DATETIME NOT NULL,
+            UNIQUE(recipient_email, item_type, project_id, item_key)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_notification_lookup
+        ON notification_history(recipient_email, item_type, project_id, item_key)
+    ''')
+
+    conn.commit()
+    conn.close()
+
+
+def get_last_notification_date(
+    db_path: str,
+    recipient_email: str,
+    item_type: str,
+    project_id: int,
+    item_key: str
+) -> Optional[datetime]:
+    """
+    Get the last notification date for a specific item.
+
+    Args:
+        db_path: Path to the SQLite database file
+        recipient_email: Email address of the recipient
+        item_type: Type of item ('branch' or 'merge_request')
+        project_id: GitLab project ID
+        item_key: Unique key for the item (branch name or MR iid)
+
+    Returns:
+        datetime of last notification or None if never notified
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT last_notified_at FROM notification_history
+        WHERE recipient_email = ? AND item_type = ? AND project_id = ? AND item_key = ?
+    ''', (recipient_email, item_type, project_id, str(item_key)))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return datetime.fromisoformat(row[0])
+    return None
+
+
+def record_notification(
+    db_path: str,
+    recipient_email: str,
+    item_type: str,
+    project_id: int,
+    item_key: str,
+    notification_time: Optional[datetime] = None
+) -> None:
+    """
+    Record that a notification was sent for a specific item.
+
+    If the item already exists in the database, updates the last_notified_at.
+    Otherwise, creates a new record.
+
+    Args:
+        db_path: Path to the SQLite database file
+        recipient_email: Email address of the recipient
+        item_type: Type of item ('branch' or 'merge_request')
+        project_id: GitLab project ID
+        item_key: Unique key for the item (branch name or MR iid)
+        notification_time: Time of notification (defaults to now)
+    """
+    if notification_time is None:
+        notification_time = datetime.now(timezone.utc)
+
+    # Format datetime as ISO string for storage
+    time_str = notification_time.isoformat()
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        INSERT INTO notification_history
+            (recipient_email, item_type, project_id, item_key, first_found_at, last_notified_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(recipient_email, item_type, project_id, item_key)
+        DO UPDATE SET last_notified_at = excluded.last_notified_at
+    ''', (recipient_email, item_type, project_id, str(item_key), time_str, time_str))
+
+    conn.commit()
+    conn.close()
+
+
+def has_new_items_for_recipient(
+    db_path: str,
+    recipient_email: str,
+    items: dict,
+    frequency_days: int
+) -> bool:
+    """
+    Check if there are any new items for a recipient that haven't been notified.
+
+    An item is considered "new" if it doesn't exist in the database or
+    was never notified about before.
+
+    Args:
+        db_path: Path to the SQLite database file
+        recipient_email: Email address of the recipient
+        items: Dictionary with 'branches' and 'merge_requests' lists
+        frequency_days: Number of days between notifications
+
+    Returns:
+        True if there are new (never-notified) items, False otherwise
+    """
+    branches = items.get('branches', [])
+    merge_requests = items.get('merge_requests', [])
+
+    for branch in branches:
+        project_id = branch.get('project_id')
+        branch_name = branch.get('branch_name')
+        last_notified = get_last_notification_date(
+            db_path, recipient_email, 'branch', project_id, branch_name
+        )
+        if last_notified is None:
+            return True
+
+    for mr in merge_requests:
+        project_id = mr.get('project_id')
+        mr_iid = mr.get('iid')
+        last_notified = get_last_notification_date(
+            db_path, recipient_email, 'merge_request', project_id, mr_iid
+        )
+        if last_notified is None:
+            return True
+
+    return False
+
+
+def should_send_notification(
+    db_path: str,
+    recipient_email: str,
+    items: dict,
+    frequency_days: int
+) -> bool:
+    """
+    Determine if a notification should be sent to a recipient.
+
+    A notification is sent if:
+    1. There are new items that have never been notified about, OR
+    2. The minimum time since the last notification has passed (frequency_days)
+
+    Args:
+        db_path: Path to the SQLite database file
+        recipient_email: Email address of the recipient
+        items: Dictionary with 'branches' and 'merge_requests' lists
+        frequency_days: Number of days between notifications
+
+    Returns:
+        True if notification should be sent, False otherwise
+    """
+    branches = items.get('branches', [])
+    merge_requests = items.get('merge_requests', [])
+
+    if not branches and not merge_requests:
+        return False
+
+    # Check if there are any new (never-notified) items
+    if has_new_items_for_recipient(db_path, recipient_email, items, frequency_days):
+        return True
+
+    # Check if enough time has passed since the last notification for any item
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=frequency_days)
+    oldest_notification = None
+
+    for branch in branches:
+        project_id = branch.get('project_id')
+        branch_name = branch.get('branch_name')
+        last_notified = get_last_notification_date(
+            db_path, recipient_email, 'branch', project_id, branch_name
+        )
+        if last_notified:
+            if oldest_notification is None or last_notified < oldest_notification:
+                oldest_notification = last_notified
+
+    for mr in merge_requests:
+        project_id = mr.get('project_id')
+        mr_iid = mr.get('iid')
+        last_notified = get_last_notification_date(
+            db_path, recipient_email, 'merge_request', project_id, mr_iid
+        )
+        if last_notified:
+            if oldest_notification is None or last_notified < oldest_notification:
+                oldest_notification = last_notified
+
+    # If the oldest notification is older than the cutoff, send a new one
+    if oldest_notification and oldest_notification < cutoff_date:
+        return True
+
+    return False
+
+
+def record_notifications_for_items(
+    db_path: str,
+    recipient_email: str,
+    items: dict,
+    notification_time: Optional[datetime] = None
+) -> None:
+    """
+    Record notifications for all items sent to a recipient.
+
+    Args:
+        db_path: Path to the SQLite database file
+        recipient_email: Email address of the recipient
+        items: Dictionary with 'branches' and 'merge_requests' lists
+        notification_time: Time of notification (defaults to now)
+    """
+    if notification_time is None:
+        notification_time = datetime.now(timezone.utc)
+
+    branches = items.get('branches', [])
+    merge_requests = items.get('merge_requests', [])
+
+    for branch in branches:
+        project_id = branch.get('project_id')
+        branch_name = branch.get('branch_name')
+        record_notification(
+            db_path, recipient_email, 'branch', project_id, branch_name, notification_time
+        )
+
+    for mr in merge_requests:
+        project_id = mr.get('project_id')
+        mr_iid = mr.get('iid')
+        record_notification(
+            db_path, recipient_email, 'merge_request', project_id, mr_iid, notification_time
+        )
 
 
 def validate_config(config: dict) -> None:
@@ -769,6 +1032,11 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
     """
     Main function to collect stale branches/MRs and send notifications.
 
+    Notifications are throttled based on the notification_frequency_days config.
+    A notification is sent if:
+    1. There are new items that have never been notified about, OR
+    2. The minimum time since the last notification has passed
+
     Args:
         config: Configuration dictionary
         dry_run: If True, don't actually send emails
@@ -781,12 +1049,20 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
 
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
+    frequency_days = config.get(
+        'notification_frequency_days', DEFAULT_NOTIFICATION_FREQUENCY_DAYS
+    )
+    db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
+
+    # Initialize the database
+    init_database(db_path)
 
     summary = {
         'total_stale_branches': 0,
         'total_stale_merge_requests': 0,
         'emails_sent': 0,
         'emails_failed': 0,
+        'emails_skipped': 0,
         'recipients': []
     }
 
@@ -796,6 +1072,15 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
 
         summary['total_stale_branches'] += len(branches)
         summary['total_stale_merge_requests'] += len(merge_requests)
+
+        # Check if we should send notification based on frequency
+        if not should_send_notification(db_path, email, items, frequency_days):
+            logger.info(
+                f"Skipping notification to {email} - "
+                f"already notified within {frequency_days} days and no new items"
+            )
+            summary['emails_skipped'] += 1
+            continue
 
         total_items = len(branches) + len(merge_requests)
         html_content = generate_email_content(
@@ -821,6 +1106,9 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
         if success:
             summary['emails_sent'] += 1
             summary['recipients'].append(email)
+            # Record notifications in database (even for dry run to test the flow)
+            if not dry_run:
+                record_notifications_for_items(db_path, email, items)
         else:
             summary['emails_failed'] += 1
 
@@ -873,6 +1161,7 @@ def main() -> Optional[int]:
     logger.info(f"Total stale branches found: {summary['total_stale_branches']}")
     logger.info(f"Total stale merge requests found: {summary.get('total_stale_merge_requests', 0)}")
     logger.info(f"Emails sent: {summary['emails_sent']}")
+    logger.info(f"Emails skipped (already notified): {summary.get('emails_skipped', 0)}")
     logger.info(f"Emails failed: {summary['emails_failed']}")
     if summary['recipients']:
         logger.info(f"Recipients: {', '.join(summary['recipients'])}")

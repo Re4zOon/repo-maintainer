@@ -1084,5 +1084,484 @@ class TestBranchWithoutMrNotification(unittest.TestCase):
         self.assertEqual(len(items['merge_requests']), 0)
         self.assertEqual(items['branches'][0]['branch_name'], 'orphan-branch')
 
+
+class TestNotificationDatabase(unittest.TestCase):
+    """Tests for notification database functions."""
+
+    def setUp(self):
+        """Set up test database."""
+        import tempfile
+        import os
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
+
+    def tearDown(self):
+        """Clean up test database."""
+        import os
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_init_database_creates_tables(self):
+        """Test that init_database creates the required tables."""
+        import sqlite3
+        stale_branch_notifier.init_database(self.db_path)
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Check that the table exists
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='notification_history'"
+        )
+        result = cursor.fetchone()
+        conn.close()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], 'notification_history')
+
+    def test_record_and_get_notification(self):
+        """Test recording and retrieving notification history."""
+        stale_branch_notifier.init_database(self.db_path)
+
+        # Record a notification
+        notification_time = datetime.now(timezone.utc)
+        stale_branch_notifier.record_notification(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'feature-branch',
+            notification_time
+        )
+
+        # Retrieve it
+        result = stale_branch_notifier.get_last_notification_date(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'feature-branch'
+        )
+
+        self.assertIsNotNone(result)
+        # Compare timestamps (allowing for some timezone handling differences)
+        self.assertEqual(result.year, notification_time.year)
+        self.assertEqual(result.month, notification_time.month)
+        self.assertEqual(result.day, notification_time.day)
+
+    def test_get_nonexistent_notification_returns_none(self):
+        """Test that getting a nonexistent notification returns None."""
+        stale_branch_notifier.init_database(self.db_path)
+
+        result = stale_branch_notifier.get_last_notification_date(
+            self.db_path,
+            'nonexistent@example.com',
+            'branch',
+            999,
+            'nonexistent-branch'
+        )
+
+        self.assertIsNone(result)
+
+    def test_record_updates_existing_notification(self):
+        """Test that recording again updates the last_notified_at."""
+        stale_branch_notifier.init_database(self.db_path)
+
+        # Record initial notification
+        old_time = datetime.now(timezone.utc) - timedelta(days=10)
+        stale_branch_notifier.record_notification(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'feature-branch',
+            old_time
+        )
+
+        # Record again with new time
+        new_time = datetime.now(timezone.utc)
+        stale_branch_notifier.record_notification(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'feature-branch',
+            new_time
+        )
+
+        # Retrieve and verify it's the new time
+        result = stale_branch_notifier.get_last_notification_date(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'feature-branch'
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.day, new_time.day)
+
+
+class TestShouldSendNotification(unittest.TestCase):
+    """Tests for should_send_notification function."""
+
+    def setUp(self):
+        """Set up test database."""
+        import tempfile
+        import os
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
+        stale_branch_notifier.init_database(self.db_path)
+
+    def tearDown(self):
+        """Clean up test database."""
+        import os
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_should_notify_for_new_items(self):
+        """Test that notification is sent for new items."""
+        items = {
+            'branches': [{
+                'project_id': 123,
+                'branch_name': 'new-branch',
+            }],
+            'merge_requests': []
+        }
+
+        result = stale_branch_notifier.should_send_notification(
+            self.db_path,
+            'test@example.com',
+            items,
+            frequency_days=7
+        )
+
+        self.assertTrue(result)
+
+    def test_should_not_notify_recently_notified_items(self):
+        """Test that notification is not sent for recently notified items."""
+        # Record a recent notification
+        recent_time = datetime.now(timezone.utc) - timedelta(days=2)
+        stale_branch_notifier.record_notification(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'old-branch',
+            recent_time
+        )
+
+        items = {
+            'branches': [{
+                'project_id': 123,
+                'branch_name': 'old-branch',
+            }],
+            'merge_requests': []
+        }
+
+        result = stale_branch_notifier.should_send_notification(
+            self.db_path,
+            'test@example.com',
+            items,
+            frequency_days=7
+        )
+
+        self.assertFalse(result)
+
+    def test_should_notify_after_frequency_period(self):
+        """Test that notification is sent after frequency period has passed."""
+        # Record an old notification
+        old_time = datetime.now(timezone.utc) - timedelta(days=10)
+        stale_branch_notifier.record_notification(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'old-branch',
+            old_time
+        )
+
+        items = {
+            'branches': [{
+                'project_id': 123,
+                'branch_name': 'old-branch',
+            }],
+            'merge_requests': []
+        }
+
+        result = stale_branch_notifier.should_send_notification(
+            self.db_path,
+            'test@example.com',
+            items,
+            frequency_days=7
+        )
+
+        self.assertTrue(result)
+
+    def test_should_notify_when_new_item_found(self):
+        """Test that notification is sent when a new item is found alongside old items."""
+        # Record a recent notification for an old item
+        recent_time = datetime.now(timezone.utc) - timedelta(days=2)
+        stale_branch_notifier.record_notification(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'old-branch',
+            recent_time
+        )
+
+        # Items include both old (recently notified) and new branches
+        items = {
+            'branches': [
+                {'project_id': 123, 'branch_name': 'old-branch'},
+                {'project_id': 123, 'branch_name': 'new-branch'},  # New item
+            ],
+            'merge_requests': []
+        }
+
+        result = stale_branch_notifier.should_send_notification(
+            self.db_path,
+            'test@example.com',
+            items,
+            frequency_days=7
+        )
+
+        # Should send notification because of the new item
+        self.assertTrue(result)
+
+    def test_should_not_notify_empty_items(self):
+        """Test that notification is not sent for empty items."""
+        items = {
+            'branches': [],
+            'merge_requests': []
+        }
+
+        result = stale_branch_notifier.should_send_notification(
+            self.db_path,
+            'test@example.com',
+            items,
+            frequency_days=7
+        )
+
+        self.assertFalse(result)
+
+
+class TestRecordNotificationsForItems(unittest.TestCase):
+    """Tests for record_notifications_for_items function."""
+
+    def setUp(self):
+        """Set up test database."""
+        import tempfile
+        import os
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
+        stale_branch_notifier.init_database(self.db_path)
+
+    def tearDown(self):
+        """Clean up test database."""
+        import os
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_records_all_branches(self):
+        """Test that all branches are recorded."""
+        items = {
+            'branches': [
+                {'project_id': 123, 'branch_name': 'branch-1'},
+                {'project_id': 123, 'branch_name': 'branch-2'},
+            ],
+            'merge_requests': []
+        }
+
+        stale_branch_notifier.record_notifications_for_items(
+            self.db_path,
+            'test@example.com',
+            items
+        )
+
+        # Verify both branches were recorded
+        result1 = stale_branch_notifier.get_last_notification_date(
+            self.db_path, 'test@example.com', 'branch', 123, 'branch-1'
+        )
+        result2 = stale_branch_notifier.get_last_notification_date(
+            self.db_path, 'test@example.com', 'branch', 123, 'branch-2'
+        )
+
+        self.assertIsNotNone(result1)
+        self.assertIsNotNone(result2)
+
+    def test_records_all_merge_requests(self):
+        """Test that all merge requests are recorded."""
+        items = {
+            'branches': [],
+            'merge_requests': [
+                {'project_id': 123, 'iid': 42},
+                {'project_id': 123, 'iid': 43},
+            ]
+        }
+
+        stale_branch_notifier.record_notifications_for_items(
+            self.db_path,
+            'test@example.com',
+            items
+        )
+
+        # Verify both MRs were recorded
+        result1 = stale_branch_notifier.get_last_notification_date(
+            self.db_path, 'test@example.com', 'merge_request', 123, 42
+        )
+        result2 = stale_branch_notifier.get_last_notification_date(
+            self.db_path, 'test@example.com', 'merge_request', 123, 43
+        )
+
+        self.assertIsNotNone(result1)
+        self.assertIsNotNone(result2)
+
+
+class TestNotifyWithThrottling(unittest.TestCase):
+    """Tests for notify_stale_branches with throttling."""
+
+    def setUp(self):
+        """Set up test database."""
+        import tempfile
+        import os
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
+
+    def tearDown(self):
+        """Clean up test database."""
+        import os
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    @patch.object(stale_branch_notifier, 'create_gitlab_client')
+    @patch.object(stale_branch_notifier, 'collect_stale_items_by_email')
+    @patch.object(stale_branch_notifier, 'send_email')
+    def test_skips_recently_notified_recipients(self, mock_send, mock_collect, mock_gl):
+        """Test that recently notified recipients are skipped."""
+        # Set up database with recent notification
+        stale_branch_notifier.init_database(self.db_path)
+        recent_time = datetime.now(timezone.utc) - timedelta(days=2)
+        stale_branch_notifier.record_notification(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'old-branch',
+            recent_time
+        )
+
+        # Set up mocks
+        mock_gl.return_value = MagicMock()
+        mock_collect.return_value = {
+            'test@example.com': {
+                'branches': [{'project_id': 123, 'branch_name': 'old-branch'}],
+                'merge_requests': []
+            }
+        }
+        mock_send.return_value = True
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': [123],
+            'stale_days': 30,
+            'notification_frequency_days': 7,
+            'database_path': self.db_path,
+        }
+
+        result = stale_branch_notifier.notify_stale_branches(config, dry_run=False)
+
+        # Should skip the email
+        self.assertEqual(result['emails_skipped'], 1)
+        self.assertEqual(result['emails_sent'], 0)
+        mock_send.assert_not_called()
+
+    @patch.object(stale_branch_notifier, 'create_gitlab_client')
+    @patch.object(stale_branch_notifier, 'collect_stale_items_by_email')
+    @patch.object(stale_branch_notifier, 'send_email')
+    def test_sends_email_for_new_items(self, mock_send, mock_collect, mock_gl):
+        """Test that new items trigger email sending."""
+        stale_branch_notifier.init_database(self.db_path)
+
+        # Set up mocks
+        mock_gl.return_value = MagicMock()
+        mock_collect.return_value = {
+            'test@example.com': {
+                'branches': [{'project_id': 123, 'branch_name': 'new-branch'}],
+                'merge_requests': []
+            }
+        }
+        mock_send.return_value = True
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': [123],
+            'stale_days': 30,
+            'notification_frequency_days': 7,
+            'database_path': self.db_path,
+        }
+
+        result = stale_branch_notifier.notify_stale_branches(config, dry_run=False)
+
+        # Should send the email
+        self.assertEqual(result['emails_sent'], 1)
+        self.assertEqual(result['emails_skipped'], 0)
+        mock_send.assert_called_once()
+
+    @patch.object(stale_branch_notifier, 'create_gitlab_client')
+    @patch.object(stale_branch_notifier, 'collect_stale_items_by_email')
+    @patch.object(stale_branch_notifier, 'send_email')
+    def test_sends_when_new_item_found_with_old_items(self, mock_send, mock_collect, mock_gl):
+        """Test that new items trigger sending even if old items were recently notified."""
+        stale_branch_notifier.init_database(self.db_path)
+
+        # Record recent notification for old branch
+        recent_time = datetime.now(timezone.utc) - timedelta(days=2)
+        stale_branch_notifier.record_notification(
+            self.db_path,
+            'test@example.com',
+            'branch',
+            123,
+            'old-branch',
+            recent_time
+        )
+
+        # Set up mocks with both old and new branches
+        mock_gl.return_value = MagicMock()
+        mock_collect.return_value = {
+            'test@example.com': {
+                'branches': [
+                    {'project_id': 123, 'branch_name': 'old-branch'},
+                    {'project_id': 123, 'branch_name': 'new-branch'},
+                ],
+                'merge_requests': []
+            }
+        }
+        mock_send.return_value = True
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': [123],
+            'stale_days': 30,
+            'notification_frequency_days': 7,
+            'database_path': self.db_path,
+        }
+
+        result = stale_branch_notifier.notify_stale_branches(config, dry_run=False)
+
+        # Should send the email because of the new item
+        self.assertEqual(result['emails_sent'], 1)
+        self.assertEqual(result['emails_skipped'], 0)
+        mock_send.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main()
