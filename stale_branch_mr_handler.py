@@ -330,7 +330,7 @@ def get_random_email_greeting(stale_days: int, config: Optional[dict] = None) ->
 
 
 # For backwards compatibility, keep MR_REMINDER_COMMENTS as an alias
-# This will be populated with loaded comments on first access
+# This constant now serves only as a static fallback and is not dynamically populated
 MR_REMINDER_COMMENTS = FALLBACK_MR_REMINDER_COMMENTS
 
 
