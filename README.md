@@ -162,12 +162,11 @@ To find the project ID for a GitLab repository:
 
 1. **Via GitLab UI**: Navigate to your project's main page. The Project ID is displayed in the "Project overview" section or under "Settings > General".
 
-2. **Via URL**: When viewing a project, check the page source or use the GitLab API:
+2. **Via GitLab API**:
    ```bash
    curl --header "PRIVATE-TOKEN: your-token" "https://gitlab.example.com/api/v4/projects?search=project-name"
    ```
-
-3. **Via GitLab API Browser**: Navigate to `https://gitlab.example.com/api/v4/projects?search=your-project-name` in your browser (while logged in).
+   The response will include the `id` field for each matching project.
 
 ## Requirements
 
