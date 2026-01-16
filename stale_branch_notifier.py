@@ -288,6 +288,7 @@ def get_mr_last_activity_date(project, mr) -> Optional[datetime]:
     # Check notes (comments) for more recent activity
     try:
         # Get the most recent note by sorting by updated_at descending
+        # Note: order_by and sort parameters are well-supported in GitLab API v4+
         notes = project.mergerequests.get(mr.iid).notes.list(
             order_by='updated_at',
             sort='desc',
@@ -295,7 +296,14 @@ def get_mr_last_activity_date(project, mr) -> Optional[datetime]:
         )
         if notes:
             note = notes[0]
-            note_date_str = getattr(note, 'updated_at', None) or getattr(note, 'created_at', None)
+            note_date_str = getattr(note, 'updated_at', None)
+            if not note_date_str:
+                # Fall back to created_at if updated_at is not available
+                note_date_str = getattr(note, 'created_at', None)
+                if note_date_str:
+                    logger.debug(
+                        f"Using created_at instead of updated_at for note on MR !{mr.iid}"
+                    )
             if note_date_str and isinstance(note_date_str, str):
                 try:
                     note_date = parse_commit_date(note_date_str)
@@ -449,12 +457,11 @@ def get_stale_merge_requests(gl: gitlab.Gitlab, project_id: int, stale_days: int
             if last_activity and last_activity < cutoff_date:
                 stale_mrs.append(mr_info)
             elif last_activity is None:
-                # If we couldn't determine activity date, include it as potentially stale
-                logger.warning(
+                # If we couldn't determine activity date, skip this MR to avoid false positives
+                logger.debug(
                     f"Could not determine last activity for MR !{mr.iid} "
-                    f"in project '{project.name}'. Including as potentially stale."
+                    f"in project '{project.name}'. Skipping staleness check."
                 )
-                stale_mrs.append(mr_info)
 
     except gitlab.exceptions.GitlabError as e:
         logger.error(f"Error fetching merge requests for project {project_id}: {e}")
