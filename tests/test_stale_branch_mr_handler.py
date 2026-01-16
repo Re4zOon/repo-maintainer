@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import gitlab
 import stale_branch_mr_handler
 from stale_branch_mr_handler import ConfigurationError
 
@@ -1547,6 +1548,525 @@ class TestNotifyWithThrottling(unittest.TestCase):
         self.assertEqual(result['emails_sent'], 1)
         self.assertEqual(result['emails_skipped'], 0)
         mock_send.assert_called_once()
+
+
+# =============================================================================
+# Tests for Automatic Archiving Functionality
+# =============================================================================
+
+
+class TestIsReadyForArchiving(unittest.TestCase):
+    """Tests for is_ready_for_archiving function."""
+
+    def test_item_old_enough_for_archiving(self):
+        """Test that item older than stale_days + cleanup_weeks is ready for archiving."""
+        # Item is 60 days old, threshold is 30 + 28 = 58 days
+        item_age = datetime.now(timezone.utc) - timedelta(days=60)
+        result = stale_branch_mr_handler.is_ready_for_archiving(item_age, 30, 4)
+        self.assertTrue(result)
+
+    def test_item_not_old_enough_for_archiving(self):
+        """Test that item younger than threshold is not ready for archiving."""
+        # Item is 40 days old, threshold is 30 + 28 = 58 days
+        item_age = datetime.now(timezone.utc) - timedelta(days=40)
+        result = stale_branch_mr_handler.is_ready_for_archiving(item_age, 30, 4)
+        self.assertFalse(result)
+
+    def test_item_exactly_at_threshold(self):
+        """Test item exactly at the threshold."""
+        # Item is exactly 58 days old, threshold is 30 + 28 = 58 days
+        item_age = datetime.now(timezone.utc) - timedelta(days=58, hours=1)
+        result = stale_branch_mr_handler.is_ready_for_archiving(item_age, 30, 4)
+        self.assertTrue(result)
+
+    def test_none_item_age_returns_false(self):
+        """Test that None item_age returns False."""
+        result = stale_branch_mr_handler.is_ready_for_archiving(None, 30, 4)
+        self.assertFalse(result)
+
+
+class TestExportBranchToArchive(unittest.TestCase):
+    """Tests for export_branch_to_archive function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_export_creates_archive_file(self):
+        """Test that export creates an archive file."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_project.repository_archive.return_value = b'fake archive data'
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_mr_handler.export_branch_to_archive(
+            mock_gl, 123, 'feature-branch', self.temp_dir, 'Test Project'
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(os.path.exists(result))
+        self.assertTrue(result.endswith('.tar.gz'))
+        mock_project.repository_archive.assert_called_once_with(
+            sha='feature-branch', format='tar.gz'
+        )
+
+    def test_export_handles_gitlab_error(self):
+        """Test that export handles GitLab errors gracefully."""
+        mock_gl = MagicMock()
+        mock_gl.projects.get.side_effect = gitlab.exceptions.GitlabError("API Error")
+
+        result = stale_branch_mr_handler.export_branch_to_archive(
+            mock_gl, 123, 'feature-branch', self.temp_dir, 'Test Project'
+        )
+
+        self.assertIsNone(result)
+
+    def test_export_sanitizes_filenames(self):
+        """Test that special characters in names are sanitized."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_project.repository_archive.return_value = b'fake archive data'
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_mr_handler.export_branch_to_archive(
+            mock_gl, 123, 'feature/branch-name', self.temp_dir, 'Test Project!'
+        )
+
+        self.assertIsNotNone(result)
+        # Check that special characters are replaced
+        self.assertNotIn('/', os.path.basename(result))
+        self.assertNotIn('!', os.path.basename(result))
+
+
+class TestCloseMergeRequest(unittest.TestCase):
+    """Tests for close_merge_request function."""
+
+    def test_close_mr_dry_run(self):
+        """Test that dry run doesn't actually close MR."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        mock_gl.projects.get.return_value = mock_project
+        mock_project.mergerequests.get.return_value = mock_mr
+
+        result = stale_branch_mr_handler.close_merge_request(
+            mock_gl, 123, 42, dry_run=True
+        )
+
+        self.assertTrue(result)
+        mock_mr.save.assert_not_called()
+
+    def test_close_mr_adds_note_and_closes(self):
+        """Test that close_merge_request adds a note and closes the MR."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        mock_gl.projects.get.return_value = mock_project
+        mock_project.mergerequests.get.return_value = mock_mr
+
+        result = stale_branch_mr_handler.close_merge_request(
+            mock_gl, 123, 42, dry_run=False
+        )
+
+        self.assertTrue(result)
+        mock_mr.notes.create.assert_called_once()
+        self.assertEqual(mock_mr.state_event, 'close')
+        mock_mr.save.assert_called_once()
+
+    def test_close_mr_handles_error(self):
+        """Test that errors are handled gracefully."""
+        mock_gl = MagicMock()
+        mock_gl.projects.get.side_effect = gitlab.exceptions.GitlabError("API Error")
+
+        result = stale_branch_mr_handler.close_merge_request(
+            mock_gl, 123, 42, dry_run=False
+        )
+
+        self.assertFalse(result)
+
+
+class TestDeleteBranch(unittest.TestCase):
+    """Tests for delete_branch function."""
+
+    def test_delete_branch_dry_run(self):
+        """Test that dry run doesn't actually delete branch."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_mr_handler.delete_branch(
+            mock_gl, 123, 'feature-branch', dry_run=True
+        )
+
+        self.assertTrue(result)
+        mock_project.branches.delete.assert_not_called()
+
+    def test_delete_branch_success(self):
+        """Test successful branch deletion."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_mr_handler.delete_branch(
+            mock_gl, 123, 'feature-branch', dry_run=False
+        )
+
+        self.assertTrue(result)
+        mock_project.branches.delete.assert_called_once_with('feature-branch')
+
+    def test_delete_branch_handles_error(self):
+        """Test that errors are handled gracefully."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_project.branches.delete.side_effect = gitlab.exceptions.GitlabError("API Error")
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_mr_handler.delete_branch(
+            mock_gl, 123, 'feature-branch', dry_run=False
+        )
+
+        self.assertFalse(result)
+
+
+class TestArchiveStaleBranch(unittest.TestCase):
+    """Tests for archive_stale_branch function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    @patch.object(stale_branch_mr_handler, 'export_branch_to_archive')
+    @patch.object(stale_branch_mr_handler, 'delete_branch')
+    def test_archive_branch_success(self, mock_delete, mock_export):
+        """Test successful branch archiving."""
+        mock_gl = MagicMock()
+        mock_export.return_value = os.path.join(self.temp_dir, 'archive.tar.gz')
+        mock_delete.return_value = True
+
+        result = stale_branch_mr_handler.archive_stale_branch(
+            mock_gl, 123, 'Test Project', 'feature-branch', self.temp_dir, dry_run=False
+        )
+
+        self.assertTrue(result['success'])
+        self.assertTrue(result['archived'])
+        self.assertTrue(result['deleted'])
+        self.assertIsNone(result['error'])
+
+    @patch.object(stale_branch_mr_handler, 'export_branch_to_archive')
+    @patch.object(stale_branch_mr_handler, 'delete_branch')
+    def test_archive_branch_export_fails_aborts_delete(self, mock_delete, mock_export):
+        """Test that failed export aborts deletion."""
+        mock_gl = MagicMock()
+        mock_export.return_value = None  # Export failed
+
+        result = stale_branch_mr_handler.archive_stale_branch(
+            mock_gl, 123, 'Test Project', 'feature-branch', self.temp_dir, dry_run=False
+        )
+
+        self.assertFalse(result['success'])
+        self.assertFalse(result['archived'])
+        self.assertFalse(result['deleted'])
+        self.assertIsNotNone(result['error'])
+        mock_delete.assert_not_called()  # Delete should not be called
+
+    @patch.object(stale_branch_mr_handler, 'export_branch_to_archive')
+    @patch.object(stale_branch_mr_handler, 'delete_branch')
+    def test_archive_branch_dry_run(self, mock_delete, mock_export):
+        """Test dry run mode."""
+        mock_gl = MagicMock()
+        mock_delete.return_value = True
+
+        result = stale_branch_mr_handler.archive_stale_branch(
+            mock_gl, 123, 'Test Project', 'feature-branch', self.temp_dir, dry_run=True
+        )
+
+        self.assertTrue(result['success'])
+        self.assertTrue(result['archived'])
+        mock_export.assert_not_called()  # Should not actually export in dry run
+
+
+class TestArchiveStaleMr(unittest.TestCase):
+    """Tests for archive_stale_mr function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    @patch.object(stale_branch_mr_handler, 'export_branch_to_archive')
+    @patch.object(stale_branch_mr_handler, 'close_merge_request')
+    @patch.object(stale_branch_mr_handler, 'delete_branch')
+    def test_archive_mr_success(self, mock_delete, mock_close, mock_export):
+        """Test successful MR archiving."""
+        mock_gl = MagicMock()
+        mock_export.return_value = os.path.join(self.temp_dir, 'archive.tar.gz')
+        mock_close.return_value = True
+        mock_delete.return_value = True
+
+        result = stale_branch_mr_handler.archive_stale_mr(
+            mock_gl, 123, 'Test Project', 'feature-branch', 42, self.temp_dir, dry_run=False
+        )
+
+        self.assertTrue(result['success'])
+        self.assertTrue(result['archived'])
+        self.assertTrue(result['mr_closed'])
+        self.assertTrue(result['deleted'])
+        self.assertIsNone(result['error'])
+
+    @patch.object(stale_branch_mr_handler, 'export_branch_to_archive')
+    @patch.object(stale_branch_mr_handler, 'close_merge_request')
+    @patch.object(stale_branch_mr_handler, 'delete_branch')
+    def test_archive_mr_export_fails_aborts_all(self, mock_delete, mock_close, mock_export):
+        """Test that failed export aborts MR close and deletion."""
+        mock_gl = MagicMock()
+        mock_export.return_value = None  # Export failed
+
+        result = stale_branch_mr_handler.archive_stale_mr(
+            mock_gl, 123, 'Test Project', 'feature-branch', 42, self.temp_dir, dry_run=False
+        )
+
+        self.assertFalse(result['success'])
+        self.assertFalse(result['archived'])
+        self.assertFalse(result['mr_closed'])
+        self.assertFalse(result['deleted'])
+        self.assertIsNotNone(result['error'])
+        mock_close.assert_not_called()
+        mock_delete.assert_not_called()
+
+    @patch.object(stale_branch_mr_handler, 'export_branch_to_archive')
+    @patch.object(stale_branch_mr_handler, 'close_merge_request')
+    @patch.object(stale_branch_mr_handler, 'delete_branch')
+    def test_archive_mr_dry_run(self, mock_delete, mock_close, mock_export):
+        """Test dry run mode."""
+        mock_gl = MagicMock()
+        mock_close.return_value = True
+        mock_delete.return_value = True
+
+        result = stale_branch_mr_handler.archive_stale_mr(
+            mock_gl, 123, 'Test Project', 'feature-branch', 42, self.temp_dir, dry_run=True
+        )
+
+        self.assertTrue(result['success'])
+        self.assertTrue(result['archived'])
+        mock_export.assert_not_called()  # Should not actually export in dry run
+
+
+class TestGetBranchesReadyForArchiving(unittest.TestCase):
+    """Tests for get_branches_ready_for_archiving function."""
+
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    def test_identifies_mr_ready_for_archiving(self, mock_get_mr, mock_get_branches, mock_get_stale_mrs):
+        """Test that MRs ready for archiving are identified."""
+        mock_gl = MagicMock()
+
+        # MR is old enough for archiving (60 days, threshold is 58)
+        old_date = datetime.now(timezone.utc) - timedelta(days=60)
+        mock_get_stale_mrs.return_value = [
+            {
+                'iid': 42,
+                'branch_name': 'old-feature',
+                'project_id': 123,
+                'project_name': 'Test Project',
+                'updated_at': old_date,
+            }
+        ]
+        mock_get_branches.return_value = []
+        mock_get_mr.return_value = None
+
+        config = {
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'projects': [123],
+        }
+
+        branches, mrs = stale_branch_mr_handler.get_branches_ready_for_archiving(mock_gl, config)
+
+        self.assertEqual(len(mrs), 1)
+        self.assertEqual(mrs[0]['iid'], 42)
+        self.assertEqual(len(branches), 0)
+
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    def test_excludes_mr_not_ready_for_archiving(self, mock_get_mr, mock_get_branches, mock_get_stale_mrs):
+        """Test that MRs not ready for archiving are excluded."""
+        mock_gl = MagicMock()
+
+        # MR is not old enough for archiving (40 days, threshold is 58)
+        recent_date = datetime.now(timezone.utc) - timedelta(days=40)
+        mock_get_stale_mrs.return_value = [
+            {
+                'iid': 42,
+                'branch_name': 'recent-feature',
+                'project_id': 123,
+                'project_name': 'Test Project',
+                'updated_at': recent_date,
+            }
+        ]
+        mock_get_branches.return_value = []
+        mock_get_mr.return_value = None
+
+        config = {
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'projects': [123],
+        }
+
+        branches, mrs = stale_branch_mr_handler.get_branches_ready_for_archiving(mock_gl, config)
+
+        self.assertEqual(len(mrs), 0)
+        self.assertEqual(len(branches), 0)
+
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    def test_identifies_branch_ready_for_archiving(self, mock_get_mr, mock_get_branches, mock_get_stale_mrs):
+        """Test that branches ready for archiving are identified."""
+        mock_gl = MagicMock()
+        mock_get_stale_mrs.return_value = []
+
+        # Branch is old enough for archiving (60 days, threshold is 58)
+        old_date = (datetime.now(timezone.utc) - timedelta(days=60)).strftime('%Y-%m-%d %H:%M:%S')
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'old-feature',
+                'project_id': 123,
+                'project_name': 'Test Project',
+                'last_commit_date': old_date,
+            }
+        ]
+        mock_get_mr.return_value = None  # No MR for this branch
+
+        config = {
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'projects': [123],
+        }
+
+        branches, mrs = stale_branch_mr_handler.get_branches_ready_for_archiving(mock_gl, config)
+
+        self.assertEqual(len(branches), 1)
+        self.assertEqual(branches[0]['branch_name'], 'old-feature')
+        self.assertEqual(len(mrs), 0)
+
+
+class TestPerformAutomaticArchiving(unittest.TestCase):
+    """Tests for perform_automatic_archiving function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'archive_stale_mr')
+    @patch.object(stale_branch_mr_handler, 'archive_stale_branch')
+    def test_performs_archiving_for_mrs(self, mock_archive_branch, mock_archive_mr, mock_get_ready, mock_gl):
+        """Test that archiving is performed for MRs."""
+        mock_gl.return_value = MagicMock()
+        mock_get_ready.return_value = (
+            [],  # No branches
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 123, 'project_name': 'Test'}]
+        )
+        mock_archive_mr.return_value = {
+            'success': True,
+            'archived': True,
+            'mr_closed': True,
+            'deleted': True,
+            'archive_path': '/path/to/archive.tar.gz',
+            'error': None
+        }
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'projects': [123],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['mrs_archived'], 1)
+        self.assertEqual(result['mrs_failed'], 0)
+        self.assertEqual(len(result['archived_items']), 1)
+        mock_archive_mr.assert_called_once()
+
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'archive_stale_mr')
+    @patch.object(stale_branch_mr_handler, 'archive_stale_branch')
+    def test_performs_archiving_for_branches(self, mock_archive_branch, mock_archive_mr, mock_get_ready, mock_gl):
+        """Test that archiving is performed for branches."""
+        mock_gl.return_value = MagicMock()
+        mock_get_ready.return_value = (
+            [{'branch_name': 'orphan', 'project_id': 123, 'project_name': 'Test'}],
+            []  # No MRs
+        )
+        mock_archive_branch.return_value = {
+            'success': True,
+            'archived': True,
+            'deleted': True,
+            'archive_path': '/path/to/archive.tar.gz',
+            'error': None
+        }
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'projects': [123],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['branches_archived'], 1)
+        self.assertEqual(result['branches_failed'], 0)
+        self.assertEqual(len(result['archived_items']), 1)
+        mock_archive_branch.assert_called_once()
+
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
+    def test_returns_empty_summary_when_nothing_to_archive(self, mock_get_ready, mock_gl):
+        """Test that empty summary is returned when nothing to archive."""
+        mock_gl.return_value = MagicMock()
+        mock_get_ready.return_value = ([], [])  # Nothing to archive
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'projects': [123],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['branches_archived'], 0)
+        self.assertEqual(result['mrs_archived'], 0)
+        self.assertEqual(len(result['archived_items']), 0)
 
 
 if __name__ == '__main__':

@@ -22,7 +22,9 @@ projects:
 # Number of days after which a branch is considered stale
 stale_days: 30
 
-# Number of weeks until automatic cleanup (mentioned in notification)
+# Number of weeks until automatic cleanup/archiving
+# After a branch/MR has been stale for stale_days + (cleanup_weeks * 7) days,
+# it becomes eligible for automatic archiving (if enabled)
 cleanup_weeks: 4
 
 # Notification frequency (in days)
@@ -53,3 +55,25 @@ smtp:
   username: "notifications@example.com"
   password: "your-smtp-password"
   from_email: "GitLab Maintenance <notifications@example.com>"
+
+# =============================================================================
+# Automatic Archiving Settings
+# =============================================================================
+# Automatic archiving safely cleans up very old stale branches and MRs by:
+# 1. Exporting the branch to a local archive folder (as a compressed tar.gz)
+# 2. Closing any associated merge requests (with a note explaining the closure)
+# 3. Deleting the source branch
+#
+# A branch/MR is eligible for archiving when it has been stale for:
+#   stale_days + (cleanup_weeks * 7) days
+# (With the default settings: 30 + 28 = 58 days)
+
+# Enable automatic archiving (default: false)
+# When enabled via config, archiving runs automatically with notifications.
+# Can also be enabled per-run with the --archive command-line flag.
+enable_auto_archive: false
+
+# Local folder to store archived branches
+# Each archived branch is saved as: {project_name}_{branch_name}_{timestamp}.tar.gz
+# Default: ./archived_branches
+archive_folder: "./archived_branches"
