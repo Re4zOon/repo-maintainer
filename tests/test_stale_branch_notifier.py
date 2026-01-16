@@ -503,22 +503,17 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
     """Tests for collect_stale_items_by_email function."""
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
     @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
     @patch.object(stale_branch_notifier, 'get_mr_notification_email')
-    def test_uses_mr_instead_of_branch_when_mr_exists(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
+    def test_uses_mr_instead_of_branch_when_mr_exists(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that MR is used instead of branch when an open MR exists."""
         mock_gl = MagicMock()
         # Use an old date to make the MR stale
         old_date = datetime.now(timezone.utc) - timedelta(days=60)
-        mock_get_branches.return_value = [
-            {
-                'branch_name': 'feature-branch',
-                'project_name': 'Test Project',
-                'committer_email': 'committer@example.com',
-                'author_email': 'committer@example.com',
-            },
-        ]
-        mock_get_mr.return_value = {
+
+        # Stale MRs are now fetched directly via get_stale_merge_requests
+        stale_mr = {
             'iid': 42,
             'title': 'Fix feature',
             'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
@@ -531,6 +526,19 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
             'last_updated': '2023-01-15 10:30:00',
             'updated_at': old_date,
         }
+        mock_get_stale_mrs.return_value = [stale_mr]
+
+        # Stale branches that have MRs should be skipped
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'feature-branch',
+                'project_name': 'Test Project',
+                'committer_email': 'committer@example.com',
+                'author_email': 'committer@example.com',
+            },
+        ]
+        # This branch has an MR, so get_merge_request_for_branch won't be called for it
+        mock_get_mr.return_value = None
         mock_get_mr_email.return_value = 'mr-author@example.com'
 
         config = {
@@ -550,22 +558,16 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
         self.assertEqual(items['merge_requests'][0]['iid'], 42)
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
     @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
     @patch.object(stale_branch_notifier, 'get_mr_notification_email')
-    def test_uses_assignee_email_for_mr_notification(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
+    def test_uses_assignee_email_for_mr_notification(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that MR assignee email is used for notification when available."""
         mock_gl = MagicMock()
         # Use an old date to make the MR stale
         old_date = datetime.now(timezone.utc) - timedelta(days=60)
-        mock_get_branches.return_value = [
-            {
-                'branch_name': 'feature-branch',
-                'project_name': 'Test Project',
-                'committer_email': 'committer@example.com',
-                'author_email': 'committer@example.com',
-            },
-        ]
-        mock_get_mr.return_value = {
+
+        stale_mr = {
             'iid': 42,
             'title': 'Fix feature',
             'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
@@ -578,6 +580,9 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
             'last_updated': '2023-01-15 10:30:00',
             'updated_at': old_date,
         }
+        mock_get_stale_mrs.return_value = [stale_mr]
+        mock_get_branches.return_value = []
+        mock_get_mr.return_value = None
         mock_get_mr_email.return_value = 'assignee@example.com'
 
         config = {
@@ -593,22 +598,16 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
         self.assertIn('assignee@example.com', result)
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
     @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
     @patch.object(stale_branch_notifier, 'get_mr_notification_email')
-    def test_uses_fallback_when_no_mr_email(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
+    def test_uses_fallback_when_no_mr_email(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that fallback email is used when MR has no assignee or author email."""
         mock_gl = MagicMock()
         # Use an old date to make the MR stale
         old_date = datetime.now(timezone.utc) - timedelta(days=60)
-        mock_get_branches.return_value = [
-            {
-                'branch_name': 'feature-branch',
-                'project_name': 'Test Project',
-                'committer_email': '',
-                'author_email': '',
-            },
-        ]
-        mock_get_mr.return_value = {
+
+        stale_mr = {
             'iid': 42,
             'title': 'Fix feature',
             'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
@@ -621,6 +620,9 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
             'last_updated': '2023-01-15 10:30:00',
             'updated_at': old_date,
         }
+        mock_get_stale_mrs.return_value = [stale_mr]
+        mock_get_branches.return_value = []
+        mock_get_mr.return_value = None
         mock_get_mr_email.return_value = 'fallback@example.com'
 
         config = {
@@ -792,13 +794,19 @@ class TestMrStalenessChecking(unittest.TestCase):
     """Tests for MR staleness checking based on MR activity."""
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
     @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
     @patch.object(stale_branch_notifier, 'get_mr_notification_email')
-    def test_skips_mr_with_recent_activity(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
+    def test_skips_mr_with_recent_activity(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that MR with recent activity is not considered stale."""
         mock_gl = MagicMock()
         # Use a recent date so the MR is NOT stale
         recent_date = datetime.now(timezone.utc) - timedelta(days=5)
+
+        # No stale MRs (MR has recent activity, so it's not returned by get_stale_merge_requests)
+        mock_get_stale_mrs.return_value = []
+
+        # Stale branch exists
         mock_get_branches.return_value = [
             {
                 'branch_name': 'feature-branch',
@@ -807,6 +815,7 @@ class TestMrStalenessChecking(unittest.TestCase):
                 'author_email': 'committer@example.com',
             },
         ]
+        # Branch has an active MR (not stale)
         mock_get_mr.return_value = {
             'iid': 42,
             'title': 'Fix feature',
@@ -830,27 +839,23 @@ class TestMrStalenessChecking(unittest.TestCase):
         result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
 
         # MR should be skipped because it has recent activity
+        # Branch should also be skipped because it has an active MR
         self.assertEqual(len(result), 0)
-        # get_mr_notification_email should not be called since MR is not stale
+        # get_mr_notification_email should not be called since no stale MRs found
         mock_get_mr_email.assert_not_called()
 
     @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
     @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
     @patch.object(stale_branch_notifier, 'get_mr_notification_email')
-    def test_includes_mr_with_old_activity(self, mock_get_mr_email, mock_get_mr, mock_get_branches):
+    def test_includes_mr_with_old_activity(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that MR with old activity is considered stale."""
         mock_gl = MagicMock()
         # Use an old date so the MR IS stale
         old_date = datetime.now(timezone.utc) - timedelta(days=60)
-        mock_get_branches.return_value = [
-            {
-                'branch_name': 'feature-branch',
-                'project_name': 'Test Project',
-                'committer_email': 'committer@example.com',
-                'author_email': 'committer@example.com',
-            },
-        ]
-        mock_get_mr.return_value = {
+
+        # Stale MR found directly
+        stale_mr = {
             'iid': 42,
             'title': 'Fix feature',
             'web_url': 'https://gitlab.example.com/project/-/merge_requests/42',
@@ -863,6 +868,9 @@ class TestMrStalenessChecking(unittest.TestCase):
             'last_updated': '2023-01-15 10:30:00',
             'updated_at': old_date,  # Old activity - stale
         }
+        mock_get_stale_mrs.return_value = [stale_mr]
+        mock_get_branches.return_value = []
+        mock_get_mr.return_value = None
         mock_get_mr_email.return_value = 'assignee@example.com'
 
         config = {
@@ -879,6 +887,202 @@ class TestMrStalenessChecking(unittest.TestCase):
         items = result['assignee@example.com']
         self.assertEqual(len(items['merge_requests']), 1)
 
+
+class TestGetMrLastActivityDate(unittest.TestCase):
+    """Tests for get_mr_last_activity_date function."""
+
+    def test_uses_mr_updated_at_when_no_notes(self):
+        """Test that MR updated_at is used when there are no notes."""
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        mock_mr.iid = 42
+        mock_mr.updated_at = '2023-01-15T10:30:00Z'
+
+        # No notes
+        mock_project.mergerequests.get.return_value.notes.list.return_value = []
+
+        result = stale_branch_notifier.get_mr_last_activity_date(mock_project, mock_mr)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.year, 2023)
+        self.assertEqual(result.month, 1)
+        self.assertEqual(result.day, 15)
+
+    def test_uses_note_date_when_more_recent(self):
+        """Test that note date is used when it's more recent than MR updated_at."""
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        mock_mr.iid = 42
+        mock_mr.updated_at = '2023-01-15T10:30:00Z'
+
+        # Note with more recent date
+        mock_note = MagicMock()
+        mock_note.updated_at = '2023-02-20T15:00:00Z'
+        mock_project.mergerequests.get.return_value.notes.list.return_value = [mock_note]
+
+        result = stale_branch_notifier.get_mr_last_activity_date(mock_project, mock_mr)
+
+        self.assertIsNotNone(result)
+        # Should use the note date (Feb 20) which is more recent than MR date (Jan 15)
+        self.assertEqual(result.month, 2)
+        self.assertEqual(result.day, 20)
+
+    def test_handles_missing_mr_updated_at(self):
+        """Test handling when MR updated_at cannot be parsed."""
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        mock_mr.iid = 42
+        mock_mr.updated_at = 'invalid-date'
+
+        # Note with valid date
+        mock_note = MagicMock()
+        mock_note.updated_at = '2023-02-20T15:00:00Z'
+        mock_project.mergerequests.get.return_value.notes.list.return_value = [mock_note]
+
+        result = stale_branch_notifier.get_mr_last_activity_date(mock_project, mock_mr)
+
+        # Should still return the note date
+        self.assertIsNotNone(result)
+        self.assertEqual(result.month, 2)
+
+
+class TestGetStaleMergeRequests(unittest.TestCase):
+    """Tests for get_stale_merge_requests function."""
+
+    def test_identifies_stale_mr(self):
+        """Test that old MRs are identified as stale."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_project.id = 1
+        mock_project.name = 'Test Project'
+
+        # Create mock MR with old activity
+        old_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+        mock_mr = MagicMock()
+        mock_mr.iid = 42
+        mock_mr.title = 'Old MR'
+        mock_mr.web_url = 'https://gitlab.example.com/project/-/merge_requests/42'
+        mock_mr.updated_at = old_date
+        mock_mr.source_branch = 'feature-branch'
+        mock_mr.author = {'name': 'Test User', 'email': 'test@example.com', 'username': 'testuser'}
+        mock_mr.assignee = None
+
+        mock_project.mergerequests.list.return_value = [mock_mr]
+        mock_project.mergerequests.get.return_value.notes.list.return_value = []
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_notifier.get_stale_merge_requests(mock_gl, 1, 30)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['iid'], 42)
+        self.assertEqual(result[0]['branch_name'], 'feature-branch')
+
+    def test_ignores_recent_mr(self):
+        """Test that recent MRs are not marked as stale."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_project.id = 1
+        mock_project.name = 'Test Project'
+
+        # Create mock MR with recent activity
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        mock_mr = MagicMock()
+        mock_mr.iid = 42
+        mock_mr.title = 'Recent MR'
+        mock_mr.web_url = 'https://gitlab.example.com/project/-/merge_requests/42'
+        mock_mr.updated_at = recent_date
+        mock_mr.source_branch = 'feature-branch'
+        mock_mr.author = {'name': 'Test User', 'email': 'test@example.com', 'username': 'testuser'}
+        mock_mr.assignee = None
+
+        mock_project.mergerequests.list.return_value = [mock_mr]
+        mock_project.mergerequests.get.return_value.notes.list.return_value = []
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_notifier.get_stale_merge_requests(mock_gl, 1, 30)
+
+        self.assertEqual(len(result), 0)
+
+    def test_mr_with_recent_note_not_stale(self):
+        """Test that MR with recent note activity is not considered stale."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_project.id = 1
+        mock_project.name = 'Test Project'
+
+        # Create mock MR with old updated_at but recent note
+        old_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+        recent_note_date = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+
+        mock_mr = MagicMock()
+        mock_mr.iid = 42
+        mock_mr.title = 'MR with recent comment'
+        mock_mr.web_url = 'https://gitlab.example.com/project/-/merge_requests/42'
+        mock_mr.updated_at = old_date  # Old MR metadata update
+        mock_mr.source_branch = 'feature-branch'
+        mock_mr.author = {'name': 'Test User', 'email': 'test@example.com', 'username': 'testuser'}
+        mock_mr.assignee = None
+
+        # Recent note/comment
+        mock_note = MagicMock()
+        mock_note.updated_at = recent_note_date
+
+        mock_project.mergerequests.list.return_value = [mock_mr]
+        mock_project.mergerequests.get.return_value.notes.list.return_value = [mock_note]
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_notifier.get_stale_merge_requests(mock_gl, 1, 30)
+
+        # MR should NOT be stale because of recent note activity
+        self.assertEqual(len(result), 0)
+
+
+class TestBranchWithoutMrNotification(unittest.TestCase):
+    """Tests for branch notification when no MR exists."""
+
+    @patch.object(stale_branch_notifier, 'get_stale_branches')
+    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
+    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_notifier, 'get_notification_email')
+    def test_notifies_stale_branch_without_mr(self, mock_get_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
+        """Test that stale branches without MRs are included in notifications."""
+        mock_gl = MagicMock()
+
+        # No stale MRs
+        mock_get_stale_mrs.return_value = []
+
+        # Stale branch exists
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'orphan-branch',
+                'project_name': 'Test Project',
+                'project_id': 1,
+                'committer_email': 'user@example.com',
+                'author_email': 'user@example.com',
+                'last_commit_date': '2023-01-15 10:00:00',
+                'author_name': 'Test User',
+            },
+        ]
+
+        # No MR for this branch
+        mock_get_mr.return_value = None
+        mock_get_email.return_value = 'user@example.com'
+
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'fallback@example.com',
+            'projects': [1],
+        }
+
+        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+
+        # Should have the branch notification
+        self.assertEqual(len(result), 1)
+        self.assertIn('user@example.com', result)
+        items = result['user@example.com']
+        self.assertEqual(len(items['branches']), 1)
+        self.assertEqual(len(items['merge_requests']), 0)
+        self.assertEqual(items['branches'][0]['branch_name'], 'orphan-branch')
 
 if __name__ == '__main__':
     unittest.main()

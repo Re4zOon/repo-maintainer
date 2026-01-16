@@ -262,6 +262,53 @@ def _get_email_from_gitlab_object(obj: dict) -> str:
     return ''
 
 
+def get_mr_last_activity_date(project, mr) -> Optional[datetime]:
+    """
+    Get the last activity date for a merge request, including notes/comments.
+
+    This checks both the MR's updated_at timestamp and the most recent note's
+    updated_at to determine the actual last activity on the MR.
+
+    Args:
+        project: GitLab project object
+        mr: GitLab merge request object
+
+    Returns:
+        The most recent activity datetime, or None if cannot be determined
+    """
+    last_activity = None
+
+    # Get MR updated_at
+    try:
+        mr_updated = parse_commit_date(mr.updated_at)
+        last_activity = mr_updated
+    except (ValueError, AttributeError, TypeError):
+        pass
+
+    # Check notes (comments) for more recent activity
+    try:
+        # Get the most recent note by sorting by updated_at descending
+        notes = project.mergerequests.get(mr.iid).notes.list(
+            order_by='updated_at',
+            sort='desc',
+            per_page=1
+        )
+        if notes:
+            note = notes[0]
+            note_date_str = getattr(note, 'updated_at', None) or getattr(note, 'created_at', None)
+            if note_date_str and isinstance(note_date_str, str):
+                try:
+                    note_date = parse_commit_date(note_date_str)
+                    if last_activity is None or note_date > last_activity:
+                        last_activity = note_date
+                except (ValueError, TypeError):
+                    pass
+    except gitlab.exceptions.GitlabError as e:
+        logger.debug(f"Error fetching notes for MR !{mr.iid}: {e}")
+
+    return last_activity
+
+
 def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
     """
     Get an open merge request for the given branch, if one exists.
@@ -281,53 +328,72 @@ def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
         )
         if mrs:
             mr = mrs[0]
-            # Get assignee email if available, otherwise use author
-            assignee_email = ''
-            assignee_username = ''
-            author_email = ''
-            author_username = ''
-
-            if hasattr(mr, 'assignee') and mr.assignee:
-                assignee_email = _get_email_from_gitlab_object(mr.assignee)
-                if isinstance(mr.assignee, dict):
-                    assignee_username = mr.assignee.get('username', '')
-            if hasattr(mr, 'author') and mr.author:
-                author_email = _get_email_from_gitlab_object(mr.author)
-                if isinstance(mr.author, dict):
-                    author_username = mr.author.get('username', '')
-
-            # Parse updated_at date for display and staleness checking
-            updated_at = mr.updated_at
-            updated_date = None
-            try:
-                updated_date = parse_commit_date(updated_at)
-                last_updated = updated_date.strftime('%Y-%m-%d %H:%M:%S')
-            except ValueError:
-                last_updated = updated_at
-
-            # Get author name with consistent isinstance check
-            author_name = 'Unknown'
-            if hasattr(mr, 'author') and mr.author and isinstance(mr.author, dict):
-                author_name = mr.author.get('name', 'Unknown')
-
-            return {
-                'iid': mr.iid,
-                'title': mr.title,
-                'web_url': mr.web_url,
-                'branch_name': branch_name,
-                'project_id': project.id,
-                'project_name': project.name,
-                'assignee_email': assignee_email,
-                'assignee_username': assignee_username,
-                'author_email': author_email,
-                'author_name': author_name,
-                'author_username': author_username,
-                'last_updated': last_updated,
-                'updated_at': updated_date,
-            }
+            return _build_mr_info_dict(project, mr, branch_name)
     except gitlab.exceptions.GitlabError as e:
         logger.warning(f"Error fetching merge requests for branch {branch_name}: {e}")
     return None
+
+
+def _build_mr_info_dict(project, mr, branch_name: Optional[str] = None) -> dict:
+    """
+    Build a standardized MR info dictionary from a GitLab MR object.
+
+    Args:
+        project: GitLab project object
+        mr: GitLab merge request object
+        branch_name: Optional source branch name (uses mr.source_branch if not provided)
+
+    Returns:
+        Dictionary with MR information
+    """
+    # Get assignee email if available, otherwise use author
+    assignee_email = ''
+    assignee_username = ''
+    author_email = ''
+    author_username = ''
+
+    if hasattr(mr, 'assignee') and mr.assignee:
+        assignee_email = _get_email_from_gitlab_object(mr.assignee)
+        if isinstance(mr.assignee, dict):
+            assignee_username = mr.assignee.get('username', '')
+    if hasattr(mr, 'author') and mr.author:
+        author_email = _get_email_from_gitlab_object(mr.author)
+        if isinstance(mr.author, dict):
+            author_username = mr.author.get('username', '')
+
+    # Get the last activity date considering notes/comments
+    last_activity_date = get_mr_last_activity_date(project, mr)
+
+    # Format for display
+    if last_activity_date:
+        last_updated = last_activity_date.strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        # Fallback to updated_at string if we couldn't parse it
+        last_updated = getattr(mr, 'updated_at', 'Unknown')
+
+    # Get author name with consistent isinstance check
+    author_name = 'Unknown'
+    if hasattr(mr, 'author') and mr.author and isinstance(mr.author, dict):
+        author_name = mr.author.get('name', 'Unknown')
+
+    # Use provided branch_name or get from MR
+    source_branch = branch_name if branch_name else getattr(mr, 'source_branch', 'Unknown')
+
+    return {
+        'iid': mr.iid,
+        'title': mr.title,
+        'web_url': mr.web_url,
+        'branch_name': source_branch,
+        'project_id': project.id,
+        'project_name': project.name,
+        'assignee_email': assignee_email,
+        'assignee_username': assignee_username,
+        'author_email': author_email,
+        'author_name': author_name,
+        'author_username': author_username,
+        'last_updated': last_updated,
+        'updated_at': last_activity_date,
+    }
 
 
 def get_user_email_by_username(gl: gitlab.Gitlab, username: str) -> str:
@@ -350,6 +416,50 @@ def get_user_email_by_username(gl: gitlab.Gitlab, username: str) -> str:
     except gitlab.exceptions.GitlabError as e:
         logger.warning(f"Error fetching user email for {username}: {e}")
     return ''
+
+
+def get_stale_merge_requests(gl: gitlab.Gitlab, project_id: int, stale_days: int) -> list:
+    """
+    Get all open merge requests from a project that have no recent activity.
+
+    Staleness is determined by checking both the MR's updated_at and the most
+    recent note/comment activity.
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        stale_days: Number of days after which an MR is considered stale
+
+    Returns:
+        List of stale MR information dictionaries
+    """
+    project = gl.projects.get(project_id)
+    stale_mrs = []
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=stale_days)
+
+    try:
+        # Get all open merge requests
+        mrs = project.mergerequests.list(state='opened', all=True)
+
+        for mr in mrs:
+            mr_info = _build_mr_info_dict(project, mr)
+            last_activity = mr_info.get('updated_at')
+
+            # Check if MR is stale (no activity within cutoff period)
+            if last_activity and last_activity < cutoff_date:
+                stale_mrs.append(mr_info)
+            elif last_activity is None:
+                # If we couldn't determine activity date, include it as potentially stale
+                logger.warning(
+                    f"Could not determine last activity for MR !{mr.iid} "
+                    f"in project '{project.name}'. Including as potentially stale."
+                )
+                stale_mrs.append(mr_info)
+
+    except gitlab.exceptions.GitlabError as e:
+        logger.error(f"Error fetching merge requests for project {project_id}: {e}")
+
+    return stale_mrs
 
 
 def is_user_active(gl: gitlab.Gitlab, email: str) -> bool:
@@ -441,8 +551,11 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     """
     Collect stale branches and merge requests from configured projects and group by email.
 
-    For branches with open MRs: checks if the MR is stale based on MR activity (updated_at).
-    For branches without MRs: checks if the branch is stale based on last commit date.
+    This function scans for:
+    1. Stale MRs - Open MRs with no recent activity (commits, comments, etc.)
+    2. Stale branches without MRs - Branches with old commits that don't have an open MR
+
+    Staleness for MRs is determined by the latest activity including notes/comments.
     Notification priority for MRs: Assignee → Author → Default (with active user checks).
 
     Args:
@@ -455,64 +568,82 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     stale_days = config.get('stale_days', 30)
     fallback_email = config.get('fallback_email', '')
     project_ids = config.get('projects', [])
-    cutoff_date = datetime.now(timezone.utc) - timedelta(days=stale_days)
 
     email_to_items = {}
     skipped_items = []
+    # Track which branches have MRs to avoid duplicate notifications
+    branches_with_mrs = set()
 
     for project_id in project_ids:
         try:
             project = gl.projects.get(project_id)
+
+            # First, get all stale MRs directly (this catches MRs even if branch has recent commits)
+            stale_mrs = get_stale_merge_requests(gl, project_id, stale_days)
+
+            for mr_info in stale_mrs:
+                # Track this branch as having an MR
+                branch_key = (project_id, mr_info['branch_name'])
+                branches_with_mrs.add(branch_key)
+
+                # Get notification email using MR priority: Assignee → Author → Default
+                notification_email = get_mr_notification_email(gl, mr_info, fallback_email)
+
+                if notification_email:
+                    if notification_email not in email_to_items:
+                        email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
+                    email_to_items[notification_email]['merge_requests'].append(mr_info)
+                else:
+                    skipped_items.append({'type': 'merge_request', 'info': mr_info})
+                    logger.warning(
+                        f"No notification email available for merge request "
+                        f"!{mr_info['iid']} in project '{mr_info['project_name']}'. "
+                        f"Configure 'fallback_email' to avoid missing notifications."
+                    )
+
+            # Next, get stale branches that don't have MRs
             branches = get_stale_branches(gl, project_id, stale_days)
 
             for branch in branches:
-                # Check if there's an open MR for this branch
+                branch_key = (project_id, branch['branch_name'])
+
+                # Skip branches that already have an MR (we already handled those above)
+                if branch_key in branches_with_mrs:
+                    logger.debug(
+                        f"Skipping branch '{branch['branch_name']}' - already has stale MR"
+                    )
+                    continue
+
+                # Check if there's an open MR for this branch (might not be stale MR)
                 mr_info = get_merge_request_for_branch(project, branch['branch_name'])
 
                 if mr_info:
-                    # For MRs, check staleness based on MR activity (updated_at), not branch commit
-                    mr_updated_at = mr_info.get('updated_at')
-                    if mr_updated_at and mr_updated_at >= cutoff_date:
-                        # MR has recent activity, skip it (not stale)
-                        logger.debug(
-                            f"MR !{mr_info['iid']} has recent activity, skipping"
-                        )
-                        continue
+                    # Branch has an MR, but MR is not stale (has recent activity)
+                    # Skip this branch - the MR takes precedence and is not stale
+                    logger.debug(
+                        f"Skipping branch '{branch['branch_name']}' - has active MR !{mr_info['iid']}"
+                    )
+                    continue
 
-                    # MR is stale - use priority: Assignee → Author → Default
-                    notification_email = get_mr_notification_email(gl, mr_info, fallback_email)
-
-                    if notification_email:
-                        if notification_email not in email_to_items:
-                            email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
-                        email_to_items[notification_email]['merge_requests'].append(mr_info)
-                    else:
-                        skipped_items.append({'type': 'merge_request', 'info': mr_info})
-                        logger.warning(
-                            f"No notification email available for merge request "
-                            f"!{mr_info['iid']} in project '{mr_info['project_name']}'. "
-                            f"Configure 'fallback_email' to avoid missing notifications."
-                        )
+                # No MR for this branch - notify about the stale branch
+                committer_email = branch.get('committer_email') or branch.get('author_email', '')
+                if not committer_email:
+                    notification_email = fallback_email
                 else:
-                    # No MR, use branch committer email
-                    committer_email = branch.get('committer_email') or branch.get('author_email', '')
-                    if not committer_email:
-                        notification_email = fallback_email
-                    else:
-                        notification_email = get_notification_email(gl, committer_email, fallback_email)
+                    notification_email = get_notification_email(gl, committer_email, fallback_email)
 
-                    if notification_email:
-                        if notification_email not in email_to_items:
-                            email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
-                        email_to_items[notification_email]['branches'].append(branch)
-                    else:
-                        skipped_items.append({'type': 'branch', 'info': branch})
-                        logger.warning(
-                            f"No notification email available for stale branch "
-                            f"'{branch['branch_name']}' in project '{branch['project_name']}'. "
-                            f"Original committer: {committer_email or 'unknown'}. "
-                            f"Configure 'fallback_email' to avoid missing notifications."
-                        )
+                if notification_email:
+                    if notification_email not in email_to_items:
+                        email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
+                    email_to_items[notification_email]['branches'].append(branch)
+                else:
+                    skipped_items.append({'type': 'branch', 'info': branch})
+                    logger.warning(
+                        f"No notification email available for stale branch "
+                        f"'{branch['branch_name']}' in project '{branch['project_name']}'. "
+                        f"Original committer: {committer_email or 'unknown'}. "
+                        f"Configure 'fallback_email' to avoid missing notifications."
+                    )
 
         except gitlab.exceptions.GitlabGetError as e:
             logger.error(f"Failed to get project {project_id}: {e}")
