@@ -15,6 +15,7 @@ A Python script that identifies stale branches and merge requests in GitLab proj
   - List of stale branches with project and commit information
   - Notification for cleanup action required
   - Warning about automatic cleanup after a configurable number of weeks
+- **MR reminder comments** - posts friendly, humorous reminder comments directly on stale MRs for increased visibility
 - **Automatic archiving** of very old stale branches and MRs that have exceeded the cleanup period:
   - Exports the branch to a compressed local archive (tar.gz)
   - Closes associated merge requests with an explanatory note
@@ -82,6 +83,11 @@ smtp:
 # Automatic archiving settings (optional)
 enable_auto_archive: false  # Enable via config, or use --archive flag
 archive_folder: "./archived_branches"  # Where to store branch archives
+
+# MR reminder comments settings (optional)
+enable_mr_comments: false        # Enable posting reminder comments on stale MRs
+mr_comment_inactivity_days: 14   # Days of inactivity before first comment
+mr_comment_frequency_days: 7     # Days between subsequent comments
 ```
 
 ## Usage
@@ -129,6 +135,26 @@ The archiving process:
 1. **Exports** the branch to a compressed archive (tar.gz) in the `archive_folder`
 2. **Closes** any associated merge requests with an explanatory note
 3. **Deletes** the source branch (only after successful export for safety)
+
+### MR Reminder Comments
+
+Enable MR reminder comments to post friendly, humorous reminders directly on stale merge requests. This provides additional visibility without affecting email notifications or archiving.
+
+```yaml
+# Enable in config.yaml
+enable_mr_comments: true
+mr_comment_inactivity_days: 14  # Post first comment after 14 days of inactivity
+mr_comment_frequency_days: 7    # Post new comments every 7 days
+```
+
+When enabled, the bot will:
+1. Identify MRs with no activity for X days (`mr_comment_inactivity_days`)
+2. Post a friendly reminder comment directly on the MR
+3. Continue posting new comments every Y days (`mr_comment_frequency_days`) if the MR remains inactive
+
+The comments are designed to be clear and encourage action while keeping things light with a touch of humor. Example:
+
+> 🧹 The cleanup bot is back! This MR hasn't had any activity recently. Don't worry, I'm not here to judge, just to remind. Maybe merge it? Maybe close it? The suspense is killing me! 😅
 
 ## Docker Deployment
 

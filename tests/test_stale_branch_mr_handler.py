@@ -2069,5 +2069,415 @@ class TestPerformAutomaticArchiving(unittest.TestCase):
         self.assertEqual(len(result['archived_items']), 0)
 
 
+# =============================================================================
+# Tests for MR Reminder Comments Functionality
+# =============================================================================
+
+
+class TestMrCommentDatabase(unittest.TestCase):
+    """Tests for MR comment database functions."""
+
+    def setUp(self):
+        """Set up test database."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
+        stale_branch_mr_handler.init_database(self.db_path)
+
+    def tearDown(self):
+        """Clean up test database."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_database_creates_mr_comment_table(self):
+        """Test that init_database creates the mr_comment_history table."""
+        import sqlite3
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='mr_comment_history'"
+            )
+            result = cursor.fetchone()
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0], 'mr_comment_history')
+
+    def test_record_and_get_mr_comment(self):
+        """Test recording and retrieving MR comment history."""
+        comment_time = datetime.now(timezone.utc)
+        stale_branch_mr_handler.record_mr_comment(
+            self.db_path, 123, 42, 0, comment_time
+        )
+
+        result = stale_branch_mr_handler.get_last_mr_comment_info(
+            self.db_path, 123, 42
+        )
+
+        self.assertIsNotNone(result)
+        last_commented_at, comment_index = result
+        self.assertEqual(comment_index, 0)
+        self.assertEqual(last_commented_at.day, comment_time.day)
+
+    def test_get_nonexistent_mr_comment_returns_none(self):
+        """Test that getting a nonexistent MR comment returns None."""
+        result = stale_branch_mr_handler.get_last_mr_comment_info(
+            self.db_path, 999, 999
+        )
+        self.assertIsNone(result)
+
+    def test_record_updates_existing_mr_comment(self):
+        """Test that recording again updates the last_commented_at and index."""
+        old_time = datetime.now(timezone.utc) - timedelta(days=10)
+        stale_branch_mr_handler.record_mr_comment(
+            self.db_path, 123, 42, 0, old_time
+        )
+
+        new_time = datetime.now(timezone.utc)
+        stale_branch_mr_handler.record_mr_comment(
+            self.db_path, 123, 42, 1, new_time
+        )
+
+        result = stale_branch_mr_handler.get_last_mr_comment_info(
+            self.db_path, 123, 42
+        )
+
+        self.assertIsNotNone(result)
+        last_commented_at, comment_index = result
+        self.assertEqual(comment_index, 1)
+        self.assertEqual(last_commented_at.day, new_time.day)
+
+
+class TestShouldPostMrComment(unittest.TestCase):
+    """Tests for should_post_mr_comment function."""
+
+    def setUp(self):
+        """Set up test database."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
+        stale_branch_mr_handler.init_database(self.db_path)
+
+    def tearDown(self):
+        """Clean up test database."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_should_post_for_stale_mr_never_commented(self):
+        """Test that a comment should be posted for a stale MR that was never commented."""
+        # MR is 20 days old, inactivity threshold is 14 days
+        mr_last_activity = datetime.now(timezone.utc) - timedelta(days=20)
+
+        result = stale_branch_mr_handler.should_post_mr_comment(
+            self.db_path, 123, 42, mr_last_activity, inactivity_days=14, frequency_days=7
+        )
+
+        self.assertTrue(result)
+
+    def test_should_not_post_for_recent_mr(self):
+        """Test that a comment should not be posted for an MR with recent activity."""
+        # MR is only 5 days old, inactivity threshold is 14 days
+        mr_last_activity = datetime.now(timezone.utc) - timedelta(days=5)
+
+        result = stale_branch_mr_handler.should_post_mr_comment(
+            self.db_path, 123, 42, mr_last_activity, inactivity_days=14, frequency_days=7
+        )
+
+        self.assertFalse(result)
+
+    def test_should_not_post_when_recently_commented(self):
+        """Test that a comment should not be posted if we recently commented."""
+        # Record a recent comment
+        recent_time = datetime.now(timezone.utc) - timedelta(days=3)
+        stale_branch_mr_handler.record_mr_comment(
+            self.db_path, 123, 42, 0, recent_time
+        )
+
+        # MR is 20 days old, but we commented 3 days ago (frequency is 7 days)
+        mr_last_activity = datetime.now(timezone.utc) - timedelta(days=20)
+
+        result = stale_branch_mr_handler.should_post_mr_comment(
+            self.db_path, 123, 42, mr_last_activity, inactivity_days=14, frequency_days=7
+        )
+
+        self.assertFalse(result)
+
+    def test_should_post_when_frequency_passed(self):
+        """Test that a comment should be posted if enough time has passed since last comment."""
+        # Record an old comment
+        old_time = datetime.now(timezone.utc) - timedelta(days=10)
+        stale_branch_mr_handler.record_mr_comment(
+            self.db_path, 123, 42, 0, old_time
+        )
+
+        # MR is 20 days old, and we commented 10 days ago (frequency is 7 days)
+        mr_last_activity = datetime.now(timezone.utc) - timedelta(days=20)
+
+        result = stale_branch_mr_handler.should_post_mr_comment(
+            self.db_path, 123, 42, mr_last_activity, inactivity_days=14, frequency_days=7
+        )
+
+        self.assertTrue(result)
+
+    def test_should_not_post_when_activity_is_none(self):
+        """Test that a comment should not be posted when activity date is None."""
+        result = stale_branch_mr_handler.should_post_mr_comment(
+            self.db_path, 123, 42, None, inactivity_days=14, frequency_days=7
+        )
+
+        self.assertFalse(result)
+
+
+class TestGetNextCommentIndex(unittest.TestCase):
+    """Tests for get_next_comment_index function."""
+
+    def setUp(self):
+        """Set up test database."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
+        stale_branch_mr_handler.init_database(self.db_path)
+
+    def tearDown(self):
+        """Clean up test database."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_returns_zero_for_new_mr(self):
+        """Test that index 0 is returned for MR with no comment history."""
+        result = stale_branch_mr_handler.get_next_comment_index(
+            self.db_path, 123, 42
+        )
+        self.assertEqual(result, 0)
+
+    def test_returns_next_index_in_sequence(self):
+        """Test that the next index in sequence is returned."""
+        stale_branch_mr_handler.record_mr_comment(
+            self.db_path, 123, 42, 0
+        )
+
+        result = stale_branch_mr_handler.get_next_comment_index(
+            self.db_path, 123, 42
+        )
+
+        self.assertEqual(result, 1)
+
+    def test_wraps_around_to_zero(self):
+        """Test that index wraps around when reaching the end of comments list."""
+        # Record that we used the last comment index
+        last_index = len(stale_branch_mr_handler.MR_REMINDER_COMMENTS) - 1
+        stale_branch_mr_handler.record_mr_comment(
+            self.db_path, 123, 42, last_index
+        )
+
+        result = stale_branch_mr_handler.get_next_comment_index(
+            self.db_path, 123, 42
+        )
+
+        self.assertEqual(result, 0)
+
+
+class TestPostMrReminderComment(unittest.TestCase):
+    """Tests for post_mr_reminder_comment function."""
+
+    def test_dry_run_does_not_post(self):
+        """Test that dry run doesn't actually post a comment."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        mock_gl.projects.get.return_value = mock_project
+        mock_project.mergerequests.get.return_value = mock_mr
+
+        result = stale_branch_mr_handler.post_mr_reminder_comment(
+            mock_gl, 123, 42, "Test comment", dry_run=True
+        )
+
+        self.assertTrue(result)
+        mock_mr.notes.create.assert_not_called()
+
+    def test_posts_comment_successfully(self):
+        """Test that comment is posted successfully."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        mock_gl.projects.get.return_value = mock_project
+        mock_project.mergerequests.get.return_value = mock_mr
+
+        result = stale_branch_mr_handler.post_mr_reminder_comment(
+            mock_gl, 123, 42, "Test comment", dry_run=False
+        )
+
+        self.assertTrue(result)
+        mock_mr.notes.create.assert_called_once_with({'body': "Test comment"})
+
+    def test_handles_gitlab_error(self):
+        """Test that GitLab errors are handled gracefully."""
+        mock_gl = MagicMock()
+        mock_gl.projects.get.side_effect = gitlab.exceptions.GitlabError("API Error")
+
+        result = stale_branch_mr_handler.post_mr_reminder_comment(
+            mock_gl, 123, 42, "Test comment", dry_run=False
+        )
+
+        self.assertFalse(result)
+
+
+class TestProcessStaleMrComments(unittest.TestCase):
+    """Tests for process_stale_mr_comments function."""
+
+    def setUp(self):
+        """Set up test database."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
+        stale_branch_mr_handler.init_database(self.db_path)
+
+    def tearDown(self):
+        """Clean up test database."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'post_mr_reminder_comment')
+    def test_posts_comments_to_stale_mrs(self, mock_post, mock_get_stale):
+        """Test that comments are posted to stale MRs."""
+        mock_gl = MagicMock()
+        old_date = datetime.now(timezone.utc) - timedelta(days=20)
+
+        mock_get_stale.return_value = [
+            {
+                'iid': 42,
+                'title': 'Test MR',
+                'project_name': 'Test Project',
+                'updated_at': old_date,
+            }
+        ]
+        mock_post.return_value = True
+
+        config = {
+            'projects': [123],
+            'mr_comment_inactivity_days': 14,
+            'mr_comment_frequency_days': 7,
+            'database_path': self.db_path,
+        }
+
+        result = stale_branch_mr_handler.process_stale_mr_comments(mock_gl, config, dry_run=False)
+
+        self.assertEqual(result['comments_posted'], 1)
+        self.assertEqual(result['comments_skipped'], 0)
+        mock_post.assert_called_once()
+
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'post_mr_reminder_comment')
+    def test_skips_recently_commented_mrs(self, mock_post, mock_get_stale):
+        """Test that MRs with recent comments are skipped."""
+        mock_gl = MagicMock()
+        old_date = datetime.now(timezone.utc) - timedelta(days=20)
+
+        # Record a recent comment
+        recent_time = datetime.now(timezone.utc) - timedelta(days=3)
+        stale_branch_mr_handler.record_mr_comment(
+            self.db_path, 123, 42, 0, recent_time
+        )
+
+        mock_get_stale.return_value = [
+            {
+                'iid': 42,
+                'title': 'Test MR',
+                'project_name': 'Test Project',
+                'updated_at': old_date,
+            }
+        ]
+
+        config = {
+            'projects': [123],
+            'mr_comment_inactivity_days': 14,
+            'mr_comment_frequency_days': 7,
+            'database_path': self.db_path,
+        }
+
+        result = stale_branch_mr_handler.process_stale_mr_comments(mock_gl, config, dry_run=False)
+
+        self.assertEqual(result['comments_posted'], 0)
+        self.assertEqual(result['comments_skipped'], 1)
+        mock_post.assert_not_called()
+
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'post_mr_reminder_comment')
+    def test_records_comment_in_database(self, mock_post, mock_get_stale):
+        """Test that comments are recorded in the database."""
+        mock_gl = MagicMock()
+        old_date = datetime.now(timezone.utc) - timedelta(days=20)
+
+        mock_get_stale.return_value = [
+            {
+                'iid': 42,
+                'title': 'Test MR',
+                'project_name': 'Test Project',
+                'updated_at': old_date,
+            }
+        ]
+        mock_post.return_value = True
+
+        config = {
+            'projects': [123],
+            'mr_comment_inactivity_days': 14,
+            'mr_comment_frequency_days': 7,
+            'database_path': self.db_path,
+        }
+
+        stale_branch_mr_handler.process_stale_mr_comments(mock_gl, config, dry_run=False)
+
+        # Check that the comment was recorded
+        comment_info = stale_branch_mr_handler.get_last_mr_comment_info(
+            self.db_path, 123, 42
+        )
+        self.assertIsNotNone(comment_info)
+
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'post_mr_reminder_comment')
+    def test_dry_run_does_not_record_comment(self, mock_post, mock_get_stale):
+        """Test that dry run doesn't record comments in the database."""
+        mock_gl = MagicMock()
+        old_date = datetime.now(timezone.utc) - timedelta(days=20)
+
+        mock_get_stale.return_value = [
+            {
+                'iid': 42,
+                'title': 'Test MR',
+                'project_name': 'Test Project',
+                'updated_at': old_date,
+            }
+        ]
+        mock_post.return_value = True
+
+        config = {
+            'projects': [123],
+            'mr_comment_inactivity_days': 14,
+            'mr_comment_frequency_days': 7,
+            'database_path': self.db_path,
+        }
+
+        stale_branch_mr_handler.process_stale_mr_comments(mock_gl, config, dry_run=True)
+
+        # Check that the comment was NOT recorded
+        comment_info = stale_branch_mr_handler.get_last_mr_comment_info(
+            self.db_path, 123, 42
+        )
+        self.assertIsNone(comment_info)
+
+
+class TestMrReminderComments(unittest.TestCase):
+    """Tests for MR_REMINDER_COMMENTS list."""
+
+    def test_comments_list_is_not_empty(self):
+        """Test that the comments list is not empty."""
+        self.assertTrue(len(stale_branch_mr_handler.MR_REMINDER_COMMENTS) > 0)
+
+    def test_all_comments_are_strings(self):
+        """Test that all comments are strings."""
+        for comment in stale_branch_mr_handler.MR_REMINDER_COMMENTS:
+            self.assertIsInstance(comment, str)
+
+    def test_all_comments_are_not_empty(self):
+        """Test that all comments are non-empty strings."""
+        for comment in stale_branch_mr_handler.MR_REMINDER_COMMENTS:
+            self.assertTrue(len(comment) > 0)
+
+
 if __name__ == '__main__':
     unittest.main()
