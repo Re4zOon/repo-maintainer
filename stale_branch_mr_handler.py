@@ -220,6 +220,23 @@ def load_messages_from_file(file_path: str) -> List[str]:
     return messages
 
 
+def _get_config_file_path(config: Optional[dict], config_key: str, default_path: str) -> str:
+    """
+    Get file path from config or use default.
+
+    Args:
+        config: Optional configuration dictionary
+        config_key: Key to look up in config
+        default_path: Default path to use if not in config
+
+    Returns:
+        File path from config or default
+    """
+    if config and config.get(config_key):
+        return config[config_key]
+    return default_path
+
+
 def get_mr_reminder_comments(config: Optional[dict] = None) -> List[str]:
     """
     Get the list of MR reminder comments.
@@ -238,9 +255,7 @@ def get_mr_reminder_comments(config: Optional[dict] = None) -> List[str]:
     if _cached_mr_comments is not None:
         return _cached_mr_comments
 
-    file_path = DEFAULT_MR_COMMENTS_FILE
-    if config and config.get('mr_comments_file'):
-        file_path = config['mr_comments_file']
+    file_path = _get_config_file_path(config, 'mr_comments_file', DEFAULT_MR_COMMENTS_FILE)
 
     try:
         _cached_mr_comments = load_messages_from_file(file_path)
@@ -270,9 +285,7 @@ def get_email_greetings(config: Optional[dict] = None) -> List[str]:
     if _cached_email_greetings is not None:
         return _cached_email_greetings
 
-    file_path = DEFAULT_EMAIL_GREETINGS_FILE
-    if config and config.get('email_greetings_file'):
-        file_path = config['email_greetings_file']
+    file_path = _get_config_file_path(config, 'email_greetings_file', DEFAULT_EMAIL_GREETINGS_FILE)
 
     try:
         _cached_email_greetings = load_messages_from_file(file_path)
