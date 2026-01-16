@@ -48,6 +48,9 @@ gitlab:
   private_token: "your-gitlab-private-token"
 
 # Project IDs to check for stale branches
+# IMPORTANT: Only the repositories listed here will be scanned.
+# This script does NOT scan all repositories in your GitLab instance.
+# You must explicitly list each project ID you want to monitor.
 projects:
   - 123
   - 456
@@ -152,6 +155,19 @@ To customize the notification layout or wording, edit `EMAIL_TEMPLATE` in
 ```bash
 python -m unittest discover tests/ -v
 ```
+
+## Finding Project IDs
+
+To find the project ID for a GitLab repository:
+
+1. **Via GitLab UI**: Navigate to your project's main page. The Project ID is displayed in the "Project overview" section or under "Settings > General".
+
+2. **Via URL**: When viewing a project, check the page source or use the GitLab API:
+   ```bash
+   curl --header "PRIVATE-TOKEN: your-token" "https://gitlab.example.com/api/v4/projects?search=project-name"
+   ```
+
+3. **Via GitLab API Browser**: Navigate to `https://gitlab.example.com/api/v4/projects?search=your-project-name` in your browser (while logged in).
 
 ## Requirements
 
