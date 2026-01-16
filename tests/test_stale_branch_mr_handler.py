@@ -1,4 +1,4 @@
-"""Tests for the GitLab Stale Branch Notifier."""
+"""Tests for the GitLab Stale Branch MR Handler."""
 
 import os
 import shutil
@@ -7,8 +7,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-import stale_branch_notifier
-from stale_branch_notifier import ConfigurationError
+import stale_branch_mr_handler
+from stale_branch_mr_handler import ConfigurationError
 
 
 class TestValidateConfig(unittest.TestCase):
@@ -30,12 +30,12 @@ class TestValidateConfig(unittest.TestCase):
             'fallback_email': 'fallback@example.com',
         }
         # Should not raise
-        stale_branch_notifier.validate_config(config)
+        stale_branch_mr_handler.validate_config(config)
 
     def test_empty_config(self):
         """Test that empty config raises error."""
         with self.assertRaises(ConfigurationError) as ctx:
-            stale_branch_notifier.validate_config({})
+            stale_branch_mr_handler.validate_config({})
         self.assertIn('empty', str(ctx.exception).lower())
 
     def test_missing_gitlab_section(self):
@@ -45,7 +45,7 @@ class TestValidateConfig(unittest.TestCase):
             'projects': [1],
         }
         with self.assertRaises(ConfigurationError) as ctx:
-            stale_branch_notifier.validate_config(config)
+            stale_branch_mr_handler.validate_config(config)
         self.assertIn('gitlab', str(ctx.exception).lower())
 
     def test_missing_gitlab_url(self):
@@ -56,7 +56,7 @@ class TestValidateConfig(unittest.TestCase):
             'projects': [1],
         }
         with self.assertRaises(ConfigurationError) as ctx:
-            stale_branch_notifier.validate_config(config)
+            stale_branch_mr_handler.validate_config(config)
         self.assertIn('url', str(ctx.exception).lower())
 
     def test_missing_smtp_section(self):
@@ -66,7 +66,7 @@ class TestValidateConfig(unittest.TestCase):
             'projects': [1],
         }
         with self.assertRaises(ConfigurationError) as ctx:
-            stale_branch_notifier.validate_config(config)
+            stale_branch_mr_handler.validate_config(config)
         self.assertIn('smtp', str(ctx.exception).lower())
 
     def test_missing_projects(self):
@@ -76,7 +76,7 @@ class TestValidateConfig(unittest.TestCase):
             'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
         }
         with self.assertRaises(ConfigurationError) as ctx:
-            stale_branch_notifier.validate_config(config)
+            stale_branch_mr_handler.validate_config(config)
         self.assertIn('projects', str(ctx.exception).lower())
 
 
@@ -85,26 +85,26 @@ class TestParseDateCommit(unittest.TestCase):
 
     def test_parse_z_suffix(self):
         """Test parsing date with Z suffix."""
-        result = stale_branch_notifier.parse_commit_date('2023-01-15T10:30:00Z')
+        result = stale_branch_mr_handler.parse_commit_date('2023-01-15T10:30:00Z')
         self.assertEqual(result.year, 2023)
         self.assertEqual(result.month, 1)
         self.assertEqual(result.day, 15)
 
     def test_parse_with_offset(self):
         """Test parsing date with timezone offset."""
-        result = stale_branch_notifier.parse_commit_date('2023-01-15T10:30:00+02:00')
+        result = stale_branch_mr_handler.parse_commit_date('2023-01-15T10:30:00+02:00')
         self.assertEqual(result.year, 2023)
         self.assertEqual(result.hour, 10)
 
     def test_parse_with_microseconds(self):
         """Test parsing date with microseconds."""
-        result = stale_branch_notifier.parse_commit_date('2023-01-15T10:30:00.123456+00:00')
+        result = stale_branch_mr_handler.parse_commit_date('2023-01-15T10:30:00.123456+00:00')
         self.assertEqual(result.year, 2023)
 
     def test_parse_invalid_format(self):
         """Test that invalid format raises ValueError."""
         with self.assertRaises(ValueError):
-            stale_branch_notifier.parse_commit_date('not-a-date')
+            stale_branch_mr_handler.parse_commit_date('not-a-date')
 
 
 class TestLoadConfig(unittest.TestCase):
@@ -112,7 +112,7 @@ class TestLoadConfig(unittest.TestCase):
 
     @patch('builtins.open')
     @patch('yaml.safe_load')
-    @patch.object(stale_branch_notifier, 'validate_config')
+    @patch.object(stale_branch_mr_handler, 'validate_config')
     def test_load_config_success(self, mock_validate, mock_yaml_load, mock_open):
         """Test successful config loading."""
         expected_config = {
@@ -122,7 +122,7 @@ class TestLoadConfig(unittest.TestCase):
         }
         mock_yaml_load.return_value = expected_config
 
-        result = stale_branch_notifier.load_config('config.yaml')
+        result = stale_branch_mr_handler.load_config('config.yaml')
 
         self.assertEqual(result, expected_config)
         mock_validate.assert_called_once_with(expected_config)
@@ -130,7 +130,7 @@ class TestLoadConfig(unittest.TestCase):
     def test_load_config_file_not_found(self):
         """Test config loading with missing file."""
         with self.assertRaises(FileNotFoundError):
-            stale_branch_notifier.load_config('nonexistent.yaml')
+            stale_branch_mr_handler.load_config('nonexistent.yaml')
 
 
 class TestIsUserActive(unittest.TestCase):
@@ -143,7 +143,7 @@ class TestIsUserActive(unittest.TestCase):
         mock_user.state = 'active'
         mock_gl.users.list.return_value = [mock_user]
 
-        result = stale_branch_notifier.is_user_active(mock_gl, 'user@example.com')
+        result = stale_branch_mr_handler.is_user_active(mock_gl, 'user@example.com')
 
         self.assertTrue(result)
         mock_gl.users.list.assert_called_once_with(search='user@example.com', per_page=1)
@@ -155,7 +155,7 @@ class TestIsUserActive(unittest.TestCase):
         mock_user.state = 'blocked'
         mock_gl.users.list.return_value = [mock_user]
 
-        result = stale_branch_notifier.is_user_active(mock_gl, 'user@example.com')
+        result = stale_branch_mr_handler.is_user_active(mock_gl, 'user@example.com')
 
         self.assertFalse(result)
 
@@ -164,7 +164,7 @@ class TestIsUserActive(unittest.TestCase):
         mock_gl = MagicMock()
         mock_gl.users.list.return_value = []
 
-        result = stale_branch_notifier.is_user_active(mock_gl, 'nonexistent@example.com')
+        result = stale_branch_mr_handler.is_user_active(mock_gl, 'nonexistent@example.com')
 
         self.assertFalse(result)
 
@@ -172,25 +172,25 @@ class TestIsUserActive(unittest.TestCase):
 class TestGetNotificationEmail(unittest.TestCase):
     """Tests for get_notification_email function."""
 
-    @patch.object(stale_branch_notifier, 'is_user_active')
+    @patch.object(stale_branch_mr_handler, 'is_user_active')
     def test_active_user_uses_own_email(self, mock_is_active):
         """Test that active user gets their own email."""
         mock_is_active.return_value = True
         mock_gl = MagicMock()
 
-        result = stale_branch_notifier.get_notification_email(
+        result = stale_branch_mr_handler.get_notification_email(
             mock_gl, 'user@example.com', 'fallback@example.com'
         )
 
         self.assertEqual(result, 'user@example.com')
 
-    @patch.object(stale_branch_notifier, 'is_user_active')
+    @patch.object(stale_branch_mr_handler, 'is_user_active')
     def test_inactive_user_uses_fallback_email(self, mock_is_active):
         """Test that inactive user gets fallback email."""
         mock_is_active.return_value = False
         mock_gl = MagicMock()
 
-        result = stale_branch_notifier.get_notification_email(
+        result = stale_branch_mr_handler.get_notification_email(
             mock_gl, 'user@example.com', 'fallback@example.com'
         )
 
@@ -220,7 +220,7 @@ class TestGetStaleBranches(unittest.TestCase):
         mock_project.branches.list.return_value = [mock_branch]
         mock_gl.projects.get.return_value = mock_project
 
-        result = stale_branch_notifier.get_stale_branches(mock_gl, 1, 30)
+        result = stale_branch_mr_handler.get_stale_branches(mock_gl, 1, 30)
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['branch_name'], 'stale-feature')
@@ -245,7 +245,7 @@ class TestGetStaleBranches(unittest.TestCase):
         mock_project.branches.list.return_value = [mock_branch]
         mock_gl.projects.get.return_value = mock_project
 
-        result = stale_branch_notifier.get_stale_branches(mock_gl, 1, 30)
+        result = stale_branch_mr_handler.get_stale_branches(mock_gl, 1, 30)
 
         self.assertEqual(len(result), 0)
 
@@ -272,7 +272,7 @@ class TestGetStaleBranches(unittest.TestCase):
         mock_project.branches.list.return_value = [mock_branch]
         mock_gl.projects.get.return_value = mock_project
 
-        result = stale_branch_notifier.get_stale_branches(mock_gl, 1, 30)
+        result = stale_branch_mr_handler.get_stale_branches(mock_gl, 1, 30)
 
         self.assertEqual(len(result), 0)
 
@@ -291,7 +291,7 @@ class TestGenerateEmailContent(unittest.TestCase):
             }
         ]
 
-        result = stale_branch_notifier.generate_email_content(branches, 30, 4)
+        result = stale_branch_mr_handler.generate_email_content(branches, 30, 4)
 
         self.assertIn('Test Project', result)
         self.assertIn('feature-branch', result)
@@ -317,7 +317,7 @@ class TestGenerateEmailContent(unittest.TestCase):
             },
         ]
 
-        result = stale_branch_notifier.generate_email_content(branches, 30, 4)
+        result = stale_branch_mr_handler.generate_email_content(branches, 30, 4)
 
         self.assertIn('Project 1', result)
         self.assertIn('branch-1', result)
@@ -336,7 +336,7 @@ class TestSendEmail(unittest.TestCase):
             'from_email': 'test@example.com',
         }
 
-        result = stale_branch_notifier.send_email(
+        result = stale_branch_mr_handler.send_email(
             smtp_config,
             'recipient@example.com',
             'Test Subject',
@@ -361,7 +361,7 @@ class TestSendEmail(unittest.TestCase):
             'from_email': 'test@example.com',
         }
 
-        result = stale_branch_notifier.send_email(
+        result = stale_branch_mr_handler.send_email(
             smtp_config,
             'recipient@example.com',
             'Test Subject',
@@ -378,9 +378,9 @@ class TestSendEmail(unittest.TestCase):
 class TestCollectStaleBranchesByEmail(unittest.TestCase):
     """Tests for collect_stale_branches_by_email function."""
 
-    @patch.object(stale_branch_notifier, 'get_stale_branches')
-    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_notification_email')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_mr_handler, 'get_notification_email')
     def test_groups_branches_by_email(self, mock_get_email, mock_get_mr, mock_get_branches):
         """Test that branches are grouped by email correctly."""
         mock_gl = MagicMock()
@@ -406,15 +406,15 @@ class TestCollectStaleBranchesByEmail(unittest.TestCase):
             'projects': [1],
         }
 
-        result = stale_branch_notifier.collect_stale_branches_by_email(mock_gl, config)
+        result = stale_branch_mr_handler.collect_stale_branches_by_email(mock_gl, config)
 
         self.assertEqual(len(result), 2)
         self.assertIn('user1@example.com', result)
         self.assertIn('user2@example.com', result)
 
-    @patch.object(stale_branch_notifier, 'get_stale_branches')
-    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_notification_email')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_mr_handler, 'get_notification_email')
     def test_skips_branches_without_email_and_no_fallback(self, mock_get_email, mock_get_mr, mock_get_branches):
         """Test that branches without email are skipped when no fallback is configured."""
         mock_gl = MagicMock()
@@ -437,7 +437,7 @@ class TestCollectStaleBranchesByEmail(unittest.TestCase):
             'projects': [1],
         }
 
-        result = stale_branch_notifier.collect_stale_branches_by_email(mock_gl, config)
+        result = stale_branch_mr_handler.collect_stale_branches_by_email(mock_gl, config)
 
         # Branch should be skipped
         self.assertEqual(len(result), 0)
@@ -462,7 +462,7 @@ class TestGetMergeRequestForBranch(unittest.TestCase):
 
         mock_project.mergerequests.list.return_value = [mock_mr]
 
-        result = stale_branch_notifier.get_merge_request_for_branch(mock_project, 'feature-branch')
+        result = stale_branch_mr_handler.get_merge_request_for_branch(mock_project, 'feature-branch')
 
         self.assertIsNotNone(result)
         self.assertEqual(result['iid'], 42)
@@ -475,7 +475,7 @@ class TestGetMergeRequestForBranch(unittest.TestCase):
         mock_project = MagicMock()
         mock_project.mergerequests.list.return_value = []
 
-        result = stale_branch_notifier.get_merge_request_for_branch(mock_project, 'orphan-branch')
+        result = stale_branch_mr_handler.get_merge_request_for_branch(mock_project, 'orphan-branch')
 
         self.assertIsNone(result)
 
@@ -495,7 +495,7 @@ class TestGetMergeRequestForBranch(unittest.TestCase):
 
         mock_project.mergerequests.list.return_value = [mock_mr]
 
-        result = stale_branch_notifier.get_merge_request_for_branch(mock_project, 'feature-branch')
+        result = stale_branch_mr_handler.get_merge_request_for_branch(mock_project, 'feature-branch')
 
         self.assertIsNotNone(result)
         self.assertEqual(result['assignee_email'], 'assignee@example.com')
@@ -505,10 +505,10 @@ class TestGetMergeRequestForBranch(unittest.TestCase):
 class TestCollectStaleItemsByEmail(unittest.TestCase):
     """Tests for collect_stale_items_by_email function."""
 
-    @patch.object(stale_branch_notifier, 'get_stale_branches')
-    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
-    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_mr_handler, 'get_mr_notification_email')
     def test_uses_mr_instead_of_branch_when_mr_exists(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that MR is used instead of branch when an open MR exists."""
         mock_gl = MagicMock()
@@ -550,7 +550,7 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
             'projects': [1],
         }
 
-        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+        result = stale_branch_mr_handler.collect_stale_items_by_email(mock_gl, config)
 
         # Should have MR, not branch
         self.assertEqual(len(result), 1)
@@ -560,10 +560,10 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
         self.assertEqual(len(items['branches']), 0)
         self.assertEqual(items['merge_requests'][0]['iid'], 42)
 
-    @patch.object(stale_branch_notifier, 'get_stale_branches')
-    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
-    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_mr_handler, 'get_mr_notification_email')
     def test_uses_assignee_email_for_mr_notification(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that MR assignee email is used for notification when available."""
         mock_gl = MagicMock()
@@ -594,16 +594,16 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
             'projects': [1],
         }
 
-        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+        result = stale_branch_mr_handler.collect_stale_items_by_email(mock_gl, config)
 
         # Should use assignee email
         self.assertEqual(len(result), 1)
         self.assertIn('assignee@example.com', result)
 
-    @patch.object(stale_branch_notifier, 'get_stale_branches')
-    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
-    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_mr_handler, 'get_mr_notification_email')
     def test_uses_fallback_when_no_mr_email(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that fallback email is used when MR has no assignee or author email."""
         mock_gl = MagicMock()
@@ -634,7 +634,7 @@ class TestCollectStaleItemsByEmail(unittest.TestCase):
             'projects': [1],
         }
 
-        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+        result = stale_branch_mr_handler.collect_stale_items_by_email(mock_gl, config)
 
         # Should use fallback email
         self.assertEqual(len(result), 1)
@@ -659,7 +659,7 @@ class TestGenerateEmailContentWithMRs(unittest.TestCase):
             }
         ]
 
-        result = stale_branch_notifier.generate_email_content(
+        result = stale_branch_mr_handler.generate_email_content(
             branches, 30, 4, merge_requests
         )
 
@@ -691,7 +691,7 @@ class TestGenerateEmailContentWithMRs(unittest.TestCase):
             }
         ]
 
-        result = stale_branch_notifier.generate_email_content(
+        result = stale_branch_mr_handler.generate_email_content(
             branches, 30, 4, merge_requests
         )
 
@@ -704,7 +704,7 @@ class TestGenerateEmailContentWithMRs(unittest.TestCase):
 class TestGetMrNotificationEmail(unittest.TestCase):
     """Tests for get_mr_notification_email function."""
 
-    @patch.object(stale_branch_notifier, 'is_user_active')
+    @patch.object(stale_branch_mr_handler, 'is_user_active')
     def test_uses_active_assignee_email(self, mock_is_active):
         """Test that active assignee email is used first."""
         mock_is_active.return_value = True
@@ -714,14 +714,14 @@ class TestGetMrNotificationEmail(unittest.TestCase):
             'author_email': 'author@example.com',
         }
 
-        result = stale_branch_notifier.get_mr_notification_email(
+        result = stale_branch_mr_handler.get_mr_notification_email(
             mock_gl, mr_info, 'fallback@example.com'
         )
 
         self.assertEqual(result, 'assignee@example.com')
         mock_is_active.assert_called_once_with(mock_gl, 'assignee@example.com')
 
-    @patch.object(stale_branch_notifier, 'is_user_active')
+    @patch.object(stale_branch_mr_handler, 'is_user_active')
     def test_uses_author_email_when_assignee_inactive(self, mock_is_active):
         """Test that author email is used when assignee is inactive."""
         # First call for assignee returns False, second for author returns True
@@ -732,14 +732,14 @@ class TestGetMrNotificationEmail(unittest.TestCase):
             'author_email': 'author@example.com',
         }
 
-        result = stale_branch_notifier.get_mr_notification_email(
+        result = stale_branch_mr_handler.get_mr_notification_email(
             mock_gl, mr_info, 'fallback@example.com'
         )
 
         self.assertEqual(result, 'author@example.com')
         self.assertEqual(mock_is_active.call_count, 2)
 
-    @patch.object(stale_branch_notifier, 'is_user_active')
+    @patch.object(stale_branch_mr_handler, 'is_user_active')
     def test_uses_fallback_when_both_inactive(self, mock_is_active):
         """Test that fallback email is used when both assignee and author are inactive."""
         mock_is_active.return_value = False
@@ -749,13 +749,13 @@ class TestGetMrNotificationEmail(unittest.TestCase):
             'author_email': 'author@example.com',
         }
 
-        result = stale_branch_notifier.get_mr_notification_email(
+        result = stale_branch_mr_handler.get_mr_notification_email(
             mock_gl, mr_info, 'fallback@example.com'
         )
 
         self.assertEqual(result, 'fallback@example.com')
 
-    @patch.object(stale_branch_notifier, 'is_user_active')
+    @patch.object(stale_branch_mr_handler, 'is_user_active')
     def test_skips_to_author_when_no_assignee(self, mock_is_active):
         """Test that author is used when there's no assignee."""
         mock_is_active.return_value = True
@@ -765,15 +765,15 @@ class TestGetMrNotificationEmail(unittest.TestCase):
             'author_email': 'author@example.com',
         }
 
-        result = stale_branch_notifier.get_mr_notification_email(
+        result = stale_branch_mr_handler.get_mr_notification_email(
             mock_gl, mr_info, 'fallback@example.com'
         )
 
         self.assertEqual(result, 'author@example.com')
         mock_is_active.assert_called_once_with(mock_gl, 'author@example.com')
 
-    @patch.object(stale_branch_notifier, 'is_user_active')
-    @patch.object(stale_branch_notifier, 'get_user_email_by_username')
+    @patch.object(stale_branch_mr_handler, 'is_user_active')
+    @patch.object(stale_branch_mr_handler, 'get_user_email_by_username')
     def test_uses_username_to_get_assignee_email(self, mock_get_email, mock_is_active):
         """Test that assignee username is used to get email when email is missing."""
         mock_get_email.return_value = 'assignee@example.com'
@@ -785,7 +785,7 @@ class TestGetMrNotificationEmail(unittest.TestCase):
             'author_email': 'author@example.com',
         }
 
-        result = stale_branch_notifier.get_mr_notification_email(
+        result = stale_branch_mr_handler.get_mr_notification_email(
             mock_gl, mr_info, 'fallback@example.com'
         )
 
@@ -796,10 +796,10 @@ class TestGetMrNotificationEmail(unittest.TestCase):
 class TestMrStalenessChecking(unittest.TestCase):
     """Tests for MR staleness checking based on MR activity."""
 
-    @patch.object(stale_branch_notifier, 'get_stale_branches')
-    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
-    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_mr_handler, 'get_mr_notification_email')
     def test_skips_mr_with_recent_activity(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that MR with recent activity is not considered stale."""
         mock_gl = MagicMock()
@@ -839,7 +839,7 @@ class TestMrStalenessChecking(unittest.TestCase):
             'projects': [1],
         }
 
-        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+        result = stale_branch_mr_handler.collect_stale_items_by_email(mock_gl, config)
 
         # MR should be skipped because it has recent activity
         # Branch should also be skipped because it has an active MR
@@ -847,10 +847,10 @@ class TestMrStalenessChecking(unittest.TestCase):
         # get_mr_notification_email should not be called since no stale MRs found
         mock_get_mr_email.assert_not_called()
 
-    @patch.object(stale_branch_notifier, 'get_stale_branches')
-    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
-    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_mr_notification_email')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_mr_handler, 'get_mr_notification_email')
     def test_includes_mr_with_old_activity(self, mock_get_mr_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that MR with old activity is considered stale."""
         mock_gl = MagicMock()
@@ -882,7 +882,7 @@ class TestMrStalenessChecking(unittest.TestCase):
             'projects': [1],
         }
 
-        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+        result = stale_branch_mr_handler.collect_stale_items_by_email(mock_gl, config)
 
         # MR should be included because it's stale
         self.assertEqual(len(result), 1)
@@ -904,7 +904,7 @@ class TestGetMrLastActivityDate(unittest.TestCase):
         # No notes
         mock_project.mergerequests.get.return_value.notes.list.return_value = []
 
-        result = stale_branch_notifier.get_mr_last_activity_date(mock_project, mock_mr)
+        result = stale_branch_mr_handler.get_mr_last_activity_date(mock_project, mock_mr)
 
         self.assertIsNotNone(result)
         self.assertEqual(result.year, 2023)
@@ -923,7 +923,7 @@ class TestGetMrLastActivityDate(unittest.TestCase):
         mock_note.updated_at = '2023-02-20T15:00:00Z'
         mock_project.mergerequests.get.return_value.notes.list.return_value = [mock_note]
 
-        result = stale_branch_notifier.get_mr_last_activity_date(mock_project, mock_mr)
+        result = stale_branch_mr_handler.get_mr_last_activity_date(mock_project, mock_mr)
 
         self.assertIsNotNone(result)
         # Should use the note date (Feb 20) which is more recent than MR date (Jan 15)
@@ -942,7 +942,7 @@ class TestGetMrLastActivityDate(unittest.TestCase):
         mock_note.updated_at = '2023-02-20T15:00:00Z'
         mock_project.mergerequests.get.return_value.notes.list.return_value = [mock_note]
 
-        result = stale_branch_notifier.get_mr_last_activity_date(mock_project, mock_mr)
+        result = stale_branch_mr_handler.get_mr_last_activity_date(mock_project, mock_mr)
 
         # Should still return the note date
         self.assertIsNotNone(result)
@@ -974,7 +974,7 @@ class TestGetStaleMergeRequests(unittest.TestCase):
         mock_project.mergerequests.get.return_value.notes.list.return_value = []
         mock_gl.projects.get.return_value = mock_project
 
-        result = stale_branch_notifier.get_stale_merge_requests(mock_gl, 1, 30)
+        result = stale_branch_mr_handler.get_stale_merge_requests(mock_gl, 1, 30)
 
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['iid'], 42)
@@ -1002,7 +1002,7 @@ class TestGetStaleMergeRequests(unittest.TestCase):
         mock_project.mergerequests.get.return_value.notes.list.return_value = []
         mock_gl.projects.get.return_value = mock_project
 
-        result = stale_branch_notifier.get_stale_merge_requests(mock_gl, 1, 30)
+        result = stale_branch_mr_handler.get_stale_merge_requests(mock_gl, 1, 30)
 
         self.assertEqual(len(result), 0)
 
@@ -1034,7 +1034,7 @@ class TestGetStaleMergeRequests(unittest.TestCase):
         mock_project.mergerequests.get.return_value.notes.list.return_value = [mock_note]
         mock_gl.projects.get.return_value = mock_project
 
-        result = stale_branch_notifier.get_stale_merge_requests(mock_gl, 1, 30)
+        result = stale_branch_mr_handler.get_stale_merge_requests(mock_gl, 1, 30)
 
         # MR should NOT be stale because of recent note activity
         self.assertEqual(len(result), 0)
@@ -1043,10 +1043,10 @@ class TestGetStaleMergeRequests(unittest.TestCase):
 class TestBranchWithoutMrNotification(unittest.TestCase):
     """Tests for branch notification when no MR exists."""
 
-    @patch.object(stale_branch_notifier, 'get_stale_branches')
-    @patch.object(stale_branch_notifier, 'get_stale_merge_requests')
-    @patch.object(stale_branch_notifier, 'get_merge_request_for_branch')
-    @patch.object(stale_branch_notifier, 'get_notification_email')
+    @patch.object(stale_branch_mr_handler, 'get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'get_stale_merge_requests')
+    @patch.object(stale_branch_mr_handler, 'get_merge_request_for_branch')
+    @patch.object(stale_branch_mr_handler, 'get_notification_email')
     def test_notifies_stale_branch_without_mr(self, mock_get_email, mock_get_mr, mock_get_stale_mrs, mock_get_branches):
         """Test that stale branches without MRs are included in notifications."""
         mock_gl = MagicMock()
@@ -1077,7 +1077,7 @@ class TestBranchWithoutMrNotification(unittest.TestCase):
             'projects': [1],
         }
 
-        result = stale_branch_notifier.collect_stale_items_by_email(mock_gl, config)
+        result = stale_branch_mr_handler.collect_stale_items_by_email(mock_gl, config)
 
         # Should have the branch notification
         self.assertEqual(len(result), 1)
@@ -1104,7 +1104,7 @@ class TestNotificationDatabase(unittest.TestCase):
     def test_init_database_creates_tables(self):
         """Test that init_database creates the required tables."""
         import sqlite3
-        stale_branch_notifier.init_database(self.db_path)
+        stale_branch_mr_handler.init_database(self.db_path)
 
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -1120,11 +1120,11 @@ class TestNotificationDatabase(unittest.TestCase):
 
     def test_record_and_get_notification(self):
         """Test recording and retrieving notification history."""
-        stale_branch_notifier.init_database(self.db_path)
+        stale_branch_mr_handler.init_database(self.db_path)
 
         # Record a notification
         notification_time = datetime.now(timezone.utc)
-        stale_branch_notifier.record_notification(
+        stale_branch_mr_handler.record_notification(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1134,7 +1134,7 @@ class TestNotificationDatabase(unittest.TestCase):
         )
 
         # Retrieve it
-        result = stale_branch_notifier.get_last_notification_date(
+        result = stale_branch_mr_handler.get_last_notification_date(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1150,9 +1150,9 @@ class TestNotificationDatabase(unittest.TestCase):
 
     def test_get_nonexistent_notification_returns_none(self):
         """Test that getting a nonexistent notification returns None."""
-        stale_branch_notifier.init_database(self.db_path)
+        stale_branch_mr_handler.init_database(self.db_path)
 
-        result = stale_branch_notifier.get_last_notification_date(
+        result = stale_branch_mr_handler.get_last_notification_date(
             self.db_path,
             'nonexistent@example.com',
             'branch',
@@ -1164,11 +1164,11 @@ class TestNotificationDatabase(unittest.TestCase):
 
     def test_record_updates_existing_notification(self):
         """Test that recording again updates the last_notified_at."""
-        stale_branch_notifier.init_database(self.db_path)
+        stale_branch_mr_handler.init_database(self.db_path)
 
         # Record initial notification
         old_time = datetime.now(timezone.utc) - timedelta(days=10)
-        stale_branch_notifier.record_notification(
+        stale_branch_mr_handler.record_notification(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1179,7 +1179,7 @@ class TestNotificationDatabase(unittest.TestCase):
 
         # Record again with new time
         new_time = datetime.now(timezone.utc)
-        stale_branch_notifier.record_notification(
+        stale_branch_mr_handler.record_notification(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1189,7 +1189,7 @@ class TestNotificationDatabase(unittest.TestCase):
         )
 
         # Retrieve and verify it's the new time
-        result = stale_branch_notifier.get_last_notification_date(
+        result = stale_branch_mr_handler.get_last_notification_date(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1208,7 +1208,7 @@ class TestShouldSendNotification(unittest.TestCase):
         """Set up test database."""
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
-        stale_branch_notifier.init_database(self.db_path)
+        stale_branch_mr_handler.init_database(self.db_path)
 
     def tearDown(self):
         """Clean up test database."""
@@ -1225,7 +1225,7 @@ class TestShouldSendNotification(unittest.TestCase):
             'merge_requests': []
         }
 
-        result = stale_branch_notifier.should_send_notification(
+        result = stale_branch_mr_handler.should_send_notification(
             self.db_path,
             'test@example.com',
             items,
@@ -1238,7 +1238,7 @@ class TestShouldSendNotification(unittest.TestCase):
         """Test that notification is not sent for recently notified items."""
         # Record a recent notification
         recent_time = datetime.now(timezone.utc) - timedelta(days=2)
-        stale_branch_notifier.record_notification(
+        stale_branch_mr_handler.record_notification(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1255,7 +1255,7 @@ class TestShouldSendNotification(unittest.TestCase):
             'merge_requests': []
         }
 
-        result = stale_branch_notifier.should_send_notification(
+        result = stale_branch_mr_handler.should_send_notification(
             self.db_path,
             'test@example.com',
             items,
@@ -1268,7 +1268,7 @@ class TestShouldSendNotification(unittest.TestCase):
         """Test that notification is sent after frequency period has passed."""
         # Record an old notification
         old_time = datetime.now(timezone.utc) - timedelta(days=10)
-        stale_branch_notifier.record_notification(
+        stale_branch_mr_handler.record_notification(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1285,7 +1285,7 @@ class TestShouldSendNotification(unittest.TestCase):
             'merge_requests': []
         }
 
-        result = stale_branch_notifier.should_send_notification(
+        result = stale_branch_mr_handler.should_send_notification(
             self.db_path,
             'test@example.com',
             items,
@@ -1298,7 +1298,7 @@ class TestShouldSendNotification(unittest.TestCase):
         """Test that notification is sent when a new item is found alongside old items."""
         # Record a recent notification for an old item
         recent_time = datetime.now(timezone.utc) - timedelta(days=2)
-        stale_branch_notifier.record_notification(
+        stale_branch_mr_handler.record_notification(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1316,7 +1316,7 @@ class TestShouldSendNotification(unittest.TestCase):
             'merge_requests': []
         }
 
-        result = stale_branch_notifier.should_send_notification(
+        result = stale_branch_mr_handler.should_send_notification(
             self.db_path,
             'test@example.com',
             items,
@@ -1333,7 +1333,7 @@ class TestShouldSendNotification(unittest.TestCase):
             'merge_requests': []
         }
 
-        result = stale_branch_notifier.should_send_notification(
+        result = stale_branch_mr_handler.should_send_notification(
             self.db_path,
             'test@example.com',
             items,
@@ -1350,7 +1350,7 @@ class TestRecordNotificationsForItems(unittest.TestCase):
         """Set up test database."""
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
-        stale_branch_notifier.init_database(self.db_path)
+        stale_branch_mr_handler.init_database(self.db_path)
 
     def tearDown(self):
         """Clean up test database."""
@@ -1367,17 +1367,17 @@ class TestRecordNotificationsForItems(unittest.TestCase):
             'merge_requests': []
         }
 
-        stale_branch_notifier.record_notifications_for_items(
+        stale_branch_mr_handler.record_notifications_for_items(
             self.db_path,
             'test@example.com',
             items
         )
 
         # Verify both branches were recorded
-        result1 = stale_branch_notifier.get_last_notification_date(
+        result1 = stale_branch_mr_handler.get_last_notification_date(
             self.db_path, 'test@example.com', 'branch', 123, 'branch-1'
         )
-        result2 = stale_branch_notifier.get_last_notification_date(
+        result2 = stale_branch_mr_handler.get_last_notification_date(
             self.db_path, 'test@example.com', 'branch', 123, 'branch-2'
         )
 
@@ -1394,17 +1394,17 @@ class TestRecordNotificationsForItems(unittest.TestCase):
             ]
         }
 
-        stale_branch_notifier.record_notifications_for_items(
+        stale_branch_mr_handler.record_notifications_for_items(
             self.db_path,
             'test@example.com',
             items
         )
 
         # Verify both MRs were recorded
-        result1 = stale_branch_notifier.get_last_notification_date(
+        result1 = stale_branch_mr_handler.get_last_notification_date(
             self.db_path, 'test@example.com', 'merge_request', 123, 42
         )
-        result2 = stale_branch_notifier.get_last_notification_date(
+        result2 = stale_branch_mr_handler.get_last_notification_date(
             self.db_path, 'test@example.com', 'merge_request', 123, 43
         )
 
@@ -1425,15 +1425,15 @@ class TestNotifyWithThrottling(unittest.TestCase):
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
-    @patch.object(stale_branch_notifier, 'create_gitlab_client')
-    @patch.object(stale_branch_notifier, 'collect_stale_items_by_email')
-    @patch.object(stale_branch_notifier, 'send_email')
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'collect_stale_items_by_email')
+    @patch.object(stale_branch_mr_handler, 'send_email')
     def test_skips_recently_notified_recipients(self, mock_send, mock_collect, mock_gl):
         """Test that recently notified recipients are skipped."""
         # Set up database with recent notification
-        stale_branch_notifier.init_database(self.db_path)
+        stale_branch_mr_handler.init_database(self.db_path)
         recent_time = datetime.now(timezone.utc) - timedelta(days=2)
-        stale_branch_notifier.record_notification(
+        stale_branch_mr_handler.record_notification(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1461,19 +1461,19 @@ class TestNotifyWithThrottling(unittest.TestCase):
             'database_path': self.db_path,
         }
 
-        result = stale_branch_notifier.notify_stale_branches(config, dry_run=False)
+        result = stale_branch_mr_handler.notify_stale_branches(config, dry_run=False)
 
         # Should skip the email
         self.assertEqual(result['emails_skipped'], 1)
         self.assertEqual(result['emails_sent'], 0)
         mock_send.assert_not_called()
 
-    @patch.object(stale_branch_notifier, 'create_gitlab_client')
-    @patch.object(stale_branch_notifier, 'collect_stale_items_by_email')
-    @patch.object(stale_branch_notifier, 'send_email')
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'collect_stale_items_by_email')
+    @patch.object(stale_branch_mr_handler, 'send_email')
     def test_sends_email_for_new_items(self, mock_send, mock_collect, mock_gl):
         """Test that new items trigger email sending."""
-        stale_branch_notifier.init_database(self.db_path)
+        stale_branch_mr_handler.init_database(self.db_path)
 
         # Set up mocks
         mock_gl.return_value = MagicMock()
@@ -1494,23 +1494,23 @@ class TestNotifyWithThrottling(unittest.TestCase):
             'database_path': self.db_path,
         }
 
-        result = stale_branch_notifier.notify_stale_branches(config, dry_run=False)
+        result = stale_branch_mr_handler.notify_stale_branches(config, dry_run=False)
 
         # Should send the email
         self.assertEqual(result['emails_sent'], 1)
         self.assertEqual(result['emails_skipped'], 0)
         mock_send.assert_called_once()
 
-    @patch.object(stale_branch_notifier, 'create_gitlab_client')
-    @patch.object(stale_branch_notifier, 'collect_stale_items_by_email')
-    @patch.object(stale_branch_notifier, 'send_email')
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'collect_stale_items_by_email')
+    @patch.object(stale_branch_mr_handler, 'send_email')
     def test_sends_when_new_item_found_with_old_items(self, mock_send, mock_collect, mock_gl):
         """Test that new items trigger sending even if old items were recently notified."""
-        stale_branch_notifier.init_database(self.db_path)
+        stale_branch_mr_handler.init_database(self.db_path)
 
         # Record recent notification for old branch
         recent_time = datetime.now(timezone.utc) - timedelta(days=2)
-        stale_branch_notifier.record_notification(
+        stale_branch_mr_handler.record_notification(
             self.db_path,
             'test@example.com',
             'branch',
@@ -1541,7 +1541,7 @@ class TestNotifyWithThrottling(unittest.TestCase):
             'database_path': self.db_path,
         }
 
-        result = stale_branch_notifier.notify_stale_branches(config, dry_run=False)
+        result = stale_branch_mr_handler.notify_stale_branches(config, dry_run=False)
 
         # Should send the email because of the new item
         self.assertEqual(result['emails_sent'], 1)

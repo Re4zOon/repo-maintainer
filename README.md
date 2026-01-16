@@ -79,25 +79,25 @@ smtp:
 ### Basic Usage
 
 ```bash
-python stale_branch_notifier.py
+python stale_branch_mr_handler.py
 ```
 
 ### With Custom Configuration File
 
 ```bash
-python stale_branch_notifier.py -c /path/to/config.yaml
+python stale_branch_mr_handler.py -c /path/to/config.yaml
 ```
 
 ### Dry Run (No Emails Sent)
 
 ```bash
-python stale_branch_notifier.py --dry-run
+python stale_branch_mr_handler.py --dry-run
 ```
 
 ### Verbose Output
 
 ```bash
-python stale_branch_notifier.py -v
+python stale_branch_mr_handler.py -v
 ```
 
 ## How It Works
@@ -148,7 +148,7 @@ Stale Branches:
 ![Example notification email](docs/images/email-notification.png)
 
 To customize the notification layout or wording, edit `EMAIL_TEMPLATE` in
-`stale_branch_notifier.py`.
+`stale_branch_mr_handler.py`.
 
 ## Running Tests
 
