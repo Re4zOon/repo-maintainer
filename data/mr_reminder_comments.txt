@@ -1,0 +1,105 @@
+# MR Reminder Comments
+# Each comment is separated by a blank line
+# Lines starting with # are ignored
+# These comments are posted on stale merge requests to remind users to take action
+
+👋 Hey there! This MR has been gathering digital dust for a while. Just a friendly nudge to see if it still needs attention. The code misses you! 🥺
+
+🦥 *sloth mode detected* This MR has been moving slower than a sloth on a lazy Sunday. Time to pick up the pace or let it rest in peace? 🪦
+
+🧹 The cleanup bot is back! This MR hasn't had any activity recently. Don't worry, I'm not here to judge, just to remind. Maybe merge it? Maybe close it? The suspense is killing me! 😅
+
+🕸️ *blows away cobwebs* Hello? Anyone there? This MR is starting to feel like an abandoned haunted house. Let's either bring it back to life or give it a proper burial! 👻
+
+⏰ Tick-tock! This MR is aging like fine wine... or maybe like milk? 🥛 Either way, it could use some love. Your future self will thank you! 🙏
+
+🌱 This MR planted its roots here a while ago but hasn't grown much. A little watering (review/update) could help it blossom! 🌸 Or maybe it's time to pull the weeds? 🌿
+
+🎵 *Plays 'Hello' by Adele* Hello from the other siiiide... This MR has been waiting for attention. At least it called a thousand times... Okay, maybe just this once. 📞
+
+🦕 Fun fact: This MR has been open so long, dinosaurs might have seen it. Let's evolve it into something that can be merged! 🦖
+
+🧊 This MR is so frozen, even Elsa would be impressed. Time to let it go... or warm it up with some fresh commits! ❄️
+
+🎭 To merge or not to merge, that is the question! This MR has been pondering its existence for quite some time. Help it find its purpose! 🎬
+
+🌙 This MR has been sleeping for a while. Should we wake it up or tuck it in permanently? 😴 The choice is yours, noble developer!
+
+🎪 Step right up! This MR has been the longest running show in our repository! Will it have a triumphant finale or a quiet curtain call? 🎠
+
+🏃 This MR started as a sprint but turned into a marathon. Let's cross that finish line together! 🏁
+
+🎸 This MR is like an unfinished song - it has potential, but needs someone to complete the melody. Rock on! 🎶
+
+🐢 Slow and steady... but maybe a bit too slow? This MR is taking the tortoise approach to completion. Time for a hare-like sprint! 🐇
+
+🎁 This MR is wrapped up but never opened! It's like a birthday present everyone forgot about. Let's unwrap some code magic! 🎀
+
+🏰 This MR has been here so long it could claim squatter's rights. Time to either move in properly or find a new home! 🏠
+
+🎯 This MR almost hit the target but got distracted. Let's refocus and score a bullseye! 🏹
+
+🌊 This MR started as a wave of enthusiasm but has become a still pond. Let's make some ripples! 💧
+
+🎨 This MR is like an unfinished masterpiece - Mona Lisa is smirking at it. Let's add those finishing strokes! 🖌️
+
+🍕 This MR is like cold pizza - still good, but better when fresh! Time to reheat those commits! 🔥
+
+🎮 Game paused! This MR has been idle for too long. Press any button (or commit) to continue! 🕹️
+
+🌻 This MR is like a seed waiting to bloom. With a little attention, it could become something beautiful! 🌷
+
+🎩 *pulls rabbit from hat* Surprise! This MR still exists! What magic shall we perform on it today? 🐰
+
+🦋 This MR started as a caterpillar of code but never quite transformed. Time for a metamorphosis? 🐛
+
+🏝️ This MR has been stranded on the island of forgotten code. Send a rescue team (reviewers)! 🚁
+
+🎻 This MR is playing a sad violin solo. Let's turn it into a symphony of successful deployment! 🎼
+
+🧩 This MR is like a puzzle missing its final piece. Let's complete the picture! 🖼️
+
+🚀 Houston, we have a stale MR! This code is ready for launch but seems stuck on the launchpad. Initiate countdown? 🛸
+
+🎡 This MR has been going round and round like a ferris wheel. Time to get off and move forward! 🎢
+
+🍳 This MR has been cooking for too long. It's either well done or burnt - let's find out! 👨‍🍳
+
+🎈 This MR is slowly deflating like a forgotten party balloon. Let's pump it up with some fresh energy! 🎉
+
+🌈 At the end of every stale MR, there's a pot of gold (or at least a merged branch). Let's find it! ☀️
+
+🎲 Roll the dice on this MR! Will it be merged, closed, or continue its epic journey? 🎰
+
+🧲 This MR has been sitting here like a fridge magnet - decorative but not doing much. Time to get magnetic! 🧲
+
+🌪️ This MR started with a whirlwind of activity but calmed into a gentle breeze. Let's stir up a storm of progress! ⛈️
+
+🎤 *taps microphone* Is this thing on? This MR has been waiting in the wings for its spotlight moment! 🌟
+
+🦜 This MR keeps squawking for attention like a parrot: "Review me! Review me!" 🗣️
+
+🧪 This MR has been in the lab so long it's growing cultures. Time for some scientific method (and maybe a merge)! 🔬
+
+🏋️ This MR has been doing the heavy lifting... of sitting around. Let's pump some iron and push those commits! 💪
+
+🎯 This MR missed the "merge early, merge often" memo. It's not too late to course correct! 📝
+
+🌮 This MR is like a taco on Taco Tuesday that nobody ate. Let's not let this delicious code go to waste! 🌯
+
+🧸 This MR needs a hug and some attention. Won't somebody think of the code children? 🤗
+
+🎭 Plot twist: This MR still exists and needs your review! What happens next is up to you, dear developer! 📖
+
+🎪 Ladies and gentlemen, presenting the MR that time forgot! Will our hero reviewers save the day? 🦸
+
+🌴 This MR has been on vacation longer than most employees. Time to come back to work! ✈️
+
+🎬 Director's cut: This MR scene has been on the editing floor for ages. Time for the final cut! ✂️
+
+🔮 The crystal ball says... this MR has a cloudy future. Let's make it crystal clear with some action! 🌟
+
+🎯 This MR has been aiming for perfection but landed in limbo. Good enough is sometimes good enough! 🏹
+
+🧁 This MR is like a cupcake in the break room - everyone sees it, but nobody commits to it. Take a bite! 🍰
+

@@ -57,6 +57,29 @@ smtp:
   from_email: "GitLab Maintenance <notifications@example.com>"
 
 # =============================================================================
+# Custom Message Files (Optional)
+# =============================================================================
+# The bot uses funny messages for emails and MR comments that are loaded from
+# text files in the 'data' directory. Each file contains 50+ message options
+# that are randomly selected to keep notifications fresh and interesting.
+#
+# You can customize these messages by:
+# 1. Editing the default files in the 'data' directory
+# 2. Specifying custom file paths below
+#
+# File format: Each message is separated by a blank line.
+# Lines starting with # are treated as comments and ignored.
+# Email greetings can use {{ stale_days }} as a template variable.
+
+# Path to custom MR reminder comments file (optional)
+# Default: ./data/mr_reminder_comments.txt
+# mr_comments_file: "./data/mr_reminder_comments.txt"
+
+# Path to custom email greetings file (optional)
+# Default: ./data/email_greetings.txt
+# email_greetings_file: "./data/email_greetings.txt"
+
+# =============================================================================
 # Automatic Archiving Settings
 # =============================================================================
 # Automatic archiving safely cleans up very old stale branches and MRs by:
@@ -90,7 +113,8 @@ archive_folder: "./archived_branches"
 # 2. The bot hasn't commented on this MR in the last mr_comment_frequency_days (Y days)
 #
 # The comments are designed to be clear and friendly (with a touch of humor)
-# to encourage action without being annoying.
+# to encourage action without being annoying. There are 50+ different comment
+# options that are randomly selected to keep notifications fresh.
 
 # Enable MR reminder comments (default: false)
 enable_mr_comments: false
