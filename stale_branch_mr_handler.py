@@ -150,20 +150,26 @@ FALLBACK_MR_REMINDER_COMMENTS = [
 
 # Fallback list of email greetings (used if file cannot be loaded)
 FALLBACK_EMAIL_GREETINGS = [
-    "This is your friendly nudge from the cleanup bot 🤖. The following items in our "
-    "GitLab projects have been snoozing for {{ stale_days }} days and could use a check-in:",
-
-    "Beep boop! 🤖 Your friendly neighborhood cleanup bot here! I've noticed some items "
-    "that have been enjoying an extended vacation ({{ stale_days }} days to be exact):",
-
-    "*adjusts monocle* 🧐 Excuse me, but it appears some of your code has been gathering "
-    "dust for {{ stale_days }} days. Perhaps it's time for a spring cleaning?",
-
-    "🎺 Attention! This is not a drill! (Okay, maybe it's a friendly drill.) "
-    "Some items have been idle for {{ stale_days }} days:",
-
-    "👋 Hey there, code wrangler! Your branches and MRs have been grazing peacefully "
-    "for {{ stale_days }} days. Time to round them up!",
+    (
+        "This is your friendly nudge from the cleanup bot 🤖. The following items in our "
+        "GitLab projects have been snoozing for {{ stale_days }} days and could use a check-in:"
+    ),
+    (
+        "Beep boop! 🤖 Your friendly neighborhood cleanup bot here! I've noticed some items "
+        "that have been enjoying an extended vacation ({{ stale_days }} days to be exact):"
+    ),
+    (
+        "*adjusts monocle* 🧐 Excuse me, but it appears some of your code has been gathering "
+        "dust for {{ stale_days }} days. Perhaps it's time for a spring cleaning?"
+    ),
+    (
+        "🎺 Attention! This is not a drill! (Okay, maybe it's a friendly drill.) "
+        "Some items have been idle for {{ stale_days }} days:"
+    ),
+    (
+        "👋 Hey there, code wrangler! Your branches and MRs have been grazing peacefully "
+        "for {{ stale_days }} days. Time to round them up!"
+    ),
 ]
 
 # Cached lists - loaded once and reused
