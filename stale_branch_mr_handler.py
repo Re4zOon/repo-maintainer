@@ -15,14 +15,10 @@ the cleanup period by:
 """
 
 import argparse
-import gzip
 import logging
 import os
-import shutil
 import smtplib
 import sqlite3
-import subprocess
-import tempfile
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
