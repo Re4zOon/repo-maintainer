@@ -25,6 +25,20 @@ stale_days: 30
 # Number of weeks until automatic cleanup (mentioned in notification)
 cleanup_weeks: 4
 
+# Notification frequency (in days)
+# Controls how often the same recipient receives notifications:
+# - If a person got an email about branch A on monday and we find a new stale
+#   branch/MR on wednesday, we send both on wednesday (new item triggers email)
+# - Otherwise, we only send once per notification_frequency_days period
+# Default: 7 (once per week)
+notification_frequency_days: 7
+
+# Path to SQLite database for tracking notification history
+# This database stores when each recipient was last notified about each item
+# to prevent sending duplicate notifications too frequently
+# Default: ./notification_history.db
+database_path: "./notification_history.db"
+
 # Fallback email address for:
 # - Inactive users (committers whose GitLab accounts are inactive)
 # - Merge requests where assignee/author email cannot be determined
