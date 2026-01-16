@@ -2520,7 +2520,7 @@ class TestLoadMessagesFromFile(unittest.TestCase):
         messages = stale_branch_mr_handler.load_messages_from_file(file_path)
 
         self.assertEqual(len(messages), 3)
-        self.assertIn("First message line 1 First message line 2", messages[0])
+        self.assertEqual("First message line 1 First message line 2", messages[0])
         self.assertEqual("Second message", messages[1])
         self.assertEqual("Third message", messages[2])
 
