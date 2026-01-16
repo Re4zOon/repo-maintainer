@@ -1,6 +1,6 @@
-# GitLab Stale Branch/Merge Request Notifier
+# GitLab Stale Branch/Merge Request Notifier and Auto-Archiver
 
-A Python script that identifies stale branches and merge requests in GitLab projects and sends email notifications to their owners about upcoming cleanup.
+A Python script that identifies stale branches and merge requests in GitLab projects, sends email notifications to their owners about upcoming cleanup, and can automatically archive very old stale items.
 
 ## Features
 
@@ -15,7 +15,12 @@ A Python script that identifies stale branches and merge requests in GitLab proj
   - List of stale branches with project and commit information
   - Notification for cleanup action required
   - Warning about automatic cleanup after a configurable number of weeks
-- **Dry-run mode** for testing without sending emails
+- **Automatic archiving** of very old stale branches and MRs that have exceeded the cleanup period:
+  - Exports the branch to a compressed local archive (tar.gz)
+  - Closes associated merge requests with an explanatory note
+  - Deletes the source branch
+  - Safety-first approach: branch is only deleted after successful export
+- **Dry-run mode** for testing without sending emails or performing archiving
 - **Skips protected branches** to avoid notifying about main/master branches
 
 ## Installation
@@ -58,7 +63,8 @@ projects:
 # Number of days after which a branch is considered stale
 stale_days: 30
 
-# Number of weeks until automatic cleanup (mentioned in notification)
+# Number of weeks until automatic cleanup/archiving
+# After stale_days + (cleanup_weeks * 7) days, items become eligible for archiving
 cleanup_weeks: 4
 
 # Fallback email for inactive users or when MR assignee/author cannot be identified
@@ -72,6 +78,10 @@ smtp:
   username: "notifications@example.com"
   password: "your-smtp-password"
   from_email: "GitLab Maintenance <notifications@example.com>"
+
+# Automatic archiving settings (optional)
+enable_auto_archive: false  # Enable via config, or use --archive flag
+archive_folder: "./archived_branches"  # Where to store branch archives
 ```
 
 ## Usage
@@ -88,7 +98,7 @@ python stale_branch_mr_handler.py
 python stale_branch_mr_handler.py -c /path/to/config.yaml
 ```
 
-### Dry Run (No Emails Sent)
+### Dry Run (No Emails Sent or Archiving Performed)
 
 ```bash
 python stale_branch_mr_handler.py --dry-run
@@ -99,6 +109,26 @@ python stale_branch_mr_handler.py --dry-run
 ```bash
 python stale_branch_mr_handler.py -v
 ```
+
+### Automatic Archiving
+
+Enable automatic archiving to clean up very old stale branches and MRs. Items are archived when they have been stale for `stale_days + (cleanup_weeks * 7)` days (default: 58 days).
+
+```bash
+# Enable via command line flag (one-time)
+python stale_branch_mr_handler.py --archive
+
+# Or enable in config.yaml for automatic runs
+# enable_auto_archive: true
+
+# Dry run to see what would be archived
+python stale_branch_mr_handler.py --archive --dry-run
+```
+
+The archiving process:
+1. **Exports** the branch to a compressed archive (tar.gz) in the `archive_folder`
+2. **Closes** any associated merge requests with an explanatory note
+3. **Deletes** the source branch (only after successful export for safety)
 
 ## Docker Deployment
 
@@ -156,6 +186,8 @@ docker run --rm \
 
 ## How It Works
 
+### Notification Mode (default)
+
 1. **Connects to GitLab** using the provided API token
 2. **Iterates through configured projects** and retrieves all open merge requests
 3. **Identifies stale MRs** based on the latest activity (including notes/comments)
@@ -165,6 +197,23 @@ docker run --rm \
 7. **For stale branches without MRs**: Groups by branch committer email
 8. **Checks if users are active** in GitLab
 9. **Sends notification emails** to active users, or to fallback email for inactive users
+
+### Automatic Archiving Mode (with `--archive` flag or `enable_auto_archive: true`)
+
+After sending notifications, if archiving is enabled:
+
+1. **Identifies items ready for archiving** - items that have been stale for at least `stale_days + (cleanup_weeks * 7)` days
+2. **For each item**:
+   - **Exports** the branch to a compressed tar.gz archive in the `archive_folder`
+   - **If MR exists**: Adds a note explaining the automatic closure and closes the MR
+   - **Deletes** the source branch (only after successful export)
+3. **Logs results** showing which items were archived successfully and any failures
+
+**Safety measures**:
+- Branches are only deleted after the archive is successfully created
+- Protected branches are never archived or deleted
+- All operations are logged for audit purposes
+- Use `--dry-run` to preview what would be archived without making changes
 
 ## Email Template
 

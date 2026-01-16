@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-GitLab Stale Branch/Merge Request Notifier
+GitLab Stale Branch/Merge Request Notifier and Auto-Archiver
 
 This script identifies stale branches in GitLab projects and sends
 email notifications to their committers about upcoming cleanup.
 If a merge request exists for a stale branch, it notifies about the MR instead.
+
+It can also perform automatic archiving of stale branches/MRs that have exceeded
+the cleanup period by:
+- Exporting the branch to a local archive folder
+- Compressing the export to save space
+- Closing any associated merge requests
+- Deleting the branch
 """
 
 import argparse
@@ -106,6 +113,10 @@ EMAIL_TEMPLATE = """
 # Default configuration values for notification throttling
 DEFAULT_NOTIFICATION_FREQUENCY_DAYS = 7
 DEFAULT_DATABASE_PATH = "./notification_history.db"
+
+# Default configuration values for automatic archiving
+DEFAULT_ARCHIVE_FOLDER = "./archived_branches"
+DEFAULT_ENABLE_AUTO_ARCHIVE = False
 
 
 class ConfigurationError(Exception):
@@ -727,6 +738,538 @@ def get_stale_merge_requests(gl: gitlab.Gitlab, project_id: int, stale_days: int
     return stale_mrs
 
 
+# =============================================================================
+# Automatic Archiving Functions
+# =============================================================================
+
+
+def is_ready_for_archiving(
+    item_age: Optional[datetime],
+    stale_days: int,
+    cleanup_weeks: int
+) -> bool:
+    """
+    Check if a branch/MR is old enough to be archived.
+
+    An item is ready for archiving if:
+    1. It has been stale (no activity) for at least stale_days
+    2. It has been stale for at least cleanup_weeks beyond the initial stale period
+
+    Args:
+        item_age: The last activity datetime of the item
+        stale_days: Number of days after which an item is considered stale
+        cleanup_weeks: Number of weeks after stale notification before archiving
+
+    Returns:
+        True if the item is ready for archiving, False otherwise
+    """
+    if item_age is None:
+        return False
+
+    # Total age required: stale_days + cleanup_weeks
+    total_days_required = stale_days + (cleanup_weeks * 7)
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=total_days_required)
+
+    return item_age < cutoff_date
+
+
+def export_branch_to_archive(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    branch_name: str,
+    archive_folder: str,
+    project_name: str
+) -> Optional[str]:
+    """
+    Export a specific branch to a local archive file using git archive.
+
+    This function exports only the specified branch (not the full repository)
+    to a tar.gz compressed archive.
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        branch_name: Name of the branch to export
+        archive_folder: Local folder to store the archive
+        project_name: Name of the project (for archive naming)
+
+    Returns:
+        Path to the created archive file, or None if export failed
+    """
+    try:
+        project = gl.projects.get(project_id)
+
+        # Create archive folder if it doesn't exist
+        os.makedirs(archive_folder, exist_ok=True)
+
+        # Create a safe filename
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        safe_project_name = "".join(
+            c if c.isalnum() or c in '-_' else '_' for c in project_name
+        )
+        safe_branch_name = "".join(
+            c if c.isalnum() or c in '-_' else '_' for c in branch_name
+        )
+        archive_filename = f"{safe_project_name}_{safe_branch_name}_{timestamp}.tar.gz"
+        archive_path = os.path.join(archive_folder, archive_filename)
+
+        # Use GitLab API to download archive of the branch
+        logger.info(
+            f"Exporting branch '{branch_name}' from project '{project_name}' "
+            f"to {archive_path}"
+        )
+
+        # Get the archive from GitLab API
+        archive_data = project.repository_archive(sha=branch_name, format='tar.gz')
+
+        # Write to file
+        with open(archive_path, 'wb') as f:
+            f.write(archive_data)
+
+        logger.info(f"Successfully exported branch to {archive_path}")
+        return archive_path
+
+    except gitlab.exceptions.GitlabError as e:
+        logger.error(f"GitLab error exporting branch '{branch_name}': {e}")
+        return None
+    except OSError as e:
+        logger.error(f"File system error exporting branch '{branch_name}': {e}")
+        return None
+
+
+def close_merge_request(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    mr_iid: int,
+    dry_run: bool = False
+) -> bool:
+    """
+    Close a merge request.
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        mr_iid: Merge request internal ID
+        dry_run: If True, don't actually close the MR
+
+    Returns:
+        True if MR was closed successfully, False otherwise
+    """
+    try:
+        project = gl.projects.get(project_id)
+        mr = project.mergerequests.get(mr_iid)
+
+        if dry_run:
+            logger.info(f"[DRY RUN] Would close MR !{mr_iid} in project {project_id}")
+            return True
+
+        # Close the MR with a note explaining the automatic archiving
+        mr.notes.create({
+            'body': (
+                "🤖 This merge request has been automatically closed by the "
+                "repository maintenance bot due to prolonged inactivity. "
+                "The source branch has been archived and will be deleted. "
+                "If this work is still needed, please create a new branch "
+                "and merge request."
+            )
+        })
+        mr.state_event = 'close'
+        mr.save()
+
+        logger.info(f"Successfully closed MR !{mr_iid} in project {project_id}")
+        return True
+
+    except gitlab.exceptions.GitlabError as e:
+        logger.error(f"Error closing MR !{mr_iid} in project {project_id}: {e}")
+        return False
+
+
+def delete_branch(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    branch_name: str,
+    dry_run: bool = False
+) -> bool:
+    """
+    Delete a branch from a GitLab project.
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        branch_name: Name of the branch to delete
+        dry_run: If True, don't actually delete the branch
+
+    Returns:
+        True if branch was deleted successfully, False otherwise
+    """
+    try:
+        project = gl.projects.get(project_id)
+
+        if dry_run:
+            logger.info(
+                f"[DRY RUN] Would delete branch '{branch_name}' from project {project_id}"
+            )
+            return True
+
+        project.branches.delete(branch_name)
+        logger.info(
+            f"Successfully deleted branch '{branch_name}' from project {project_id}"
+        )
+        return True
+
+    except gitlab.exceptions.GitlabError as e:
+        logger.error(
+            f"Error deleting branch '{branch_name}' from project {project_id}: {e}"
+        )
+        return False
+
+
+def archive_stale_branch(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    project_name: str,
+    branch_name: str,
+    archive_folder: str,
+    dry_run: bool = False
+) -> dict:
+    """
+    Archive a stale branch by exporting it and then deleting it.
+
+    This is a safe operation that:
+    1. First exports the branch to a local archive
+    2. Only deletes the branch if the export was successful
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        project_name: Name of the project
+        branch_name: Name of the branch to archive
+        archive_folder: Local folder to store the archive
+        dry_run: If True, don't actually archive/delete
+
+    Returns:
+        Dictionary with result status and details
+    """
+    result = {
+        'success': False,
+        'branch_name': branch_name,
+        'project_name': project_name,
+        'archived': False,
+        'deleted': False,
+        'archive_path': None,
+        'error': None
+    }
+
+    # Step 1: Export the branch to archive
+    if dry_run:
+        logger.info(
+            f"[DRY RUN] Would export branch '{branch_name}' from '{project_name}' "
+            f"to {archive_folder}"
+        )
+        result['archive_path'] = f"{archive_folder}/{project_name}_{branch_name}_<timestamp>.tar.gz"
+        result['archived'] = True
+    else:
+        archive_path = export_branch_to_archive(
+            gl, project_id, branch_name, archive_folder, project_name
+        )
+        if archive_path:
+            result['archived'] = True
+            result['archive_path'] = archive_path
+        else:
+            result['error'] = "Failed to export branch - aborting deletion for safety"
+            logger.error(
+                f"Failed to export branch '{branch_name}' - skipping deletion for safety"
+            )
+            return result
+
+    # Step 2: Delete the branch (only if export succeeded)
+    if delete_branch(gl, project_id, branch_name, dry_run=dry_run):
+        result['deleted'] = True
+        result['success'] = True
+    else:
+        result['error'] = "Branch was archived but could not be deleted"
+
+    return result
+
+
+def archive_stale_mr(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    project_name: str,
+    branch_name: str,
+    mr_iid: int,
+    archive_folder: str,
+    dry_run: bool = False
+) -> dict:
+    """
+    Archive a stale merge request and its source branch.
+
+    This is a safe operation that:
+    1. First exports the branch to a local archive
+    2. Closes the merge request (with a note explaining the closure)
+    3. Only deletes the branch if both previous steps succeeded
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        project_name: Name of the project
+        branch_name: Name of the source branch
+        mr_iid: Merge request internal ID
+        archive_folder: Local folder to store the archive
+        dry_run: If True, don't actually archive/close/delete
+
+    Returns:
+        Dictionary with result status and details
+    """
+    result = {
+        'success': False,
+        'branch_name': branch_name,
+        'project_name': project_name,
+        'mr_iid': mr_iid,
+        'archived': False,
+        'mr_closed': False,
+        'deleted': False,
+        'archive_path': None,
+        'error': None
+    }
+
+    # Step 1: Export the branch to archive
+    if dry_run:
+        logger.info(
+            f"[DRY RUN] Would export branch '{branch_name}' from '{project_name}' "
+            f"to {archive_folder}"
+        )
+        result['archive_path'] = f"{archive_folder}/{project_name}_{branch_name}_<timestamp>.tar.gz"
+        result['archived'] = True
+    else:
+        archive_path = export_branch_to_archive(
+            gl, project_id, branch_name, archive_folder, project_name
+        )
+        if archive_path:
+            result['archived'] = True
+            result['archive_path'] = archive_path
+        else:
+            result['error'] = "Failed to export branch - aborting MR close and deletion for safety"
+            logger.error(
+                f"Failed to export branch '{branch_name}' for MR !{mr_iid} - "
+                f"skipping closure and deletion for safety"
+            )
+            return result
+
+    # Step 2: Close the merge request (only if export succeeded)
+    if close_merge_request(gl, project_id, mr_iid, dry_run=dry_run):
+        result['mr_closed'] = True
+    else:
+        result['error'] = "Branch was archived but MR could not be closed"
+        # Continue to try to delete the branch anyway since we have the archive
+
+    # Step 3: Delete the branch (only if export succeeded)
+    if delete_branch(gl, project_id, branch_name, dry_run=dry_run):
+        result['deleted'] = True
+        if result['mr_closed']:
+            result['success'] = True
+    else:
+        if result['error']:
+            result['error'] += "; Branch could not be deleted"
+        else:
+            result['error'] = "Branch was archived and MR closed but branch could not be deleted"
+
+    return result
+
+
+def get_branches_ready_for_archiving(
+    gl: gitlab.Gitlab,
+    config: dict
+) -> tuple:
+    """
+    Get branches and MRs that are ready for archiving.
+
+    An item is ready for archiving if it has been stale for at least
+    stale_days + (cleanup_weeks * 7) days.
+
+    Args:
+        gl: Authenticated GitLab client
+        config: Configuration dictionary
+
+    Returns:
+        Tuple of (branches_to_archive, mrs_to_archive) where each is a list of dicts
+    """
+    stale_days = config.get('stale_days', 30)
+    cleanup_weeks = config.get('cleanup_weeks', 4)
+    project_ids = config.get('projects', [])
+
+    branches_to_archive = []
+    mrs_to_archive = []
+    branches_with_mrs = set()
+
+    for project_id in project_ids:
+        try:
+            project = gl.projects.get(project_id)
+
+            # First, get all stale MRs and check if they're ready for archiving
+            stale_mrs = get_stale_merge_requests(gl, project_id, stale_days)
+
+            for mr_info in stale_mrs:
+                branch_key = (project_id, mr_info['branch_name'])
+                branches_with_mrs.add(branch_key)
+
+                last_activity = mr_info.get('updated_at')
+                if is_ready_for_archiving(last_activity, stale_days, cleanup_weeks):
+                    mrs_to_archive.append(mr_info)
+                    logger.debug(
+                        f"MR !{mr_info['iid']} in '{mr_info['project_name']}' "
+                        f"is ready for archiving"
+                    )
+
+            # Next, get stale branches without MRs
+            stale_branches = get_stale_branches(gl, project_id, stale_days)
+
+            for branch in stale_branches:
+                branch_key = (project_id, branch['branch_name'])
+
+                # Skip branches that have MRs (we already handled those)
+                if branch_key in branches_with_mrs:
+                    continue
+
+                # Check if there's an open MR for this branch (might not be stale)
+                mr_info = get_merge_request_for_branch(project, branch['branch_name'])
+                if mr_info:
+                    # Branch has an active MR, skip it
+                    continue
+
+                # Parse the commit date to check if ready for archiving
+                try:
+                    commit_date = parse_commit_date(
+                        branch['last_commit_date'].replace(' ', 'T') + '+00:00'
+                    )
+                except ValueError:
+                    logger.warning(
+                        f"Could not parse date for branch '{branch['branch_name']}', skipping"
+                    )
+                    continue
+
+                if is_ready_for_archiving(commit_date, stale_days, cleanup_weeks):
+                    branches_to_archive.append(branch)
+                    logger.debug(
+                        f"Branch '{branch['branch_name']}' in '{branch['project_name']}' "
+                        f"is ready for archiving"
+                    )
+
+        except gitlab.exceptions.GitlabGetError as e:
+            logger.error(f"Failed to get project {project_id}: {e}")
+
+    return branches_to_archive, mrs_to_archive
+
+
+def perform_automatic_archiving(config: dict, dry_run: bool = False) -> dict:
+    """
+    Main function to perform automatic archiving of stale branches and MRs.
+
+    This function:
+    1. Identifies branches and MRs that have exceeded the cleanup period
+    2. Exports each branch to a local archive
+    3. Closes any associated MRs
+    4. Deletes the branches
+
+    Args:
+        config: Configuration dictionary
+        dry_run: If True, don't actually archive/close/delete
+
+    Returns:
+        Summary of archiving operations
+    """
+    gl = create_gitlab_client(config)
+
+    archive_folder = config.get('archive_folder', DEFAULT_ARCHIVE_FOLDER)
+    stale_days = config.get('stale_days', 30)
+    cleanup_weeks = config.get('cleanup_weeks', 4)
+
+    summary = {
+        'branches_archived': 0,
+        'branches_failed': 0,
+        'mrs_archived': 0,
+        'mrs_failed': 0,
+        'archived_items': [],
+        'failed_items': [],
+        'stale_days': stale_days,
+        'cleanup_weeks': cleanup_weeks,
+        'total_days': stale_days + (cleanup_weeks * 7),
+    }
+
+    branches_to_archive, mrs_to_archive = get_branches_ready_for_archiving(gl, config)
+
+    logger.info(
+        f"Found {len(branches_to_archive)} branches and {len(mrs_to_archive)} MRs "
+        f"ready for archiving (older than {summary['total_days']} days)"
+    )
+
+    # Archive MRs first (includes branch archiving)
+    for mr_info in mrs_to_archive:
+        result = archive_stale_mr(
+            gl=gl,
+            project_id=mr_info['project_id'],
+            project_name=mr_info['project_name'],
+            branch_name=mr_info['branch_name'],
+            mr_iid=mr_info['iid'],
+            archive_folder=archive_folder,
+            dry_run=dry_run
+        )
+
+        if result['success']:
+            summary['mrs_archived'] += 1
+            summary['archived_items'].append({
+                'type': 'merge_request',
+                'project': mr_info['project_name'],
+                'branch': mr_info['branch_name'],
+                'mr_iid': mr_info['iid'],
+                'archive_path': result['archive_path']
+            })
+        else:
+            summary['mrs_failed'] += 1
+            summary['failed_items'].append({
+                'type': 'merge_request',
+                'project': mr_info['project_name'],
+                'branch': mr_info['branch_name'],
+                'mr_iid': mr_info['iid'],
+                'error': result['error']
+            })
+
+    # Archive branches without MRs
+    for branch in branches_to_archive:
+        result = archive_stale_branch(
+            gl=gl,
+            project_id=branch['project_id'],
+            project_name=branch['project_name'],
+            branch_name=branch['branch_name'],
+            archive_folder=archive_folder,
+            dry_run=dry_run
+        )
+
+        if result['success']:
+            summary['branches_archived'] += 1
+            summary['archived_items'].append({
+                'type': 'branch',
+                'project': branch['project_name'],
+                'branch': branch['branch_name'],
+                'archive_path': result['archive_path']
+            })
+        else:
+            summary['branches_failed'] += 1
+            summary['failed_items'].append({
+                'type': 'branch',
+                'project': branch['project_name'],
+                'branch': branch['branch_name'],
+                'error': result['error']
+            })
+
+    return summary
+
+
+# =============================================================================
+# End of Automatic Archiving Functions
+# =============================================================================
+
+
 def is_user_active(gl: gitlab.Gitlab, email: str) -> bool:
     """
     Check if a GitLab user with the given email is active.
@@ -1113,7 +1656,8 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
 def main() -> Optional[int]:
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(
-        description='Notify GitLab users about stale branches and merge requests'
+        description='Notify GitLab users about stale branches and merge requests, '
+                    'and optionally perform automatic archiving of very old items.'
     )
     parser.add_argument(
         '-c', '--config',
@@ -1123,12 +1667,21 @@ def main() -> Optional[int]:
     parser.add_argument(
         '--dry-run',
         action='store_true',
-        help='Run without sending actual emails'
+        help='Run without sending actual emails or performing archiving'
     )
     parser.add_argument(
         '-v', '--verbose',
         action='store_true',
         help='Enable verbose logging'
+    )
+    parser.add_argument(
+        '--archive',
+        action='store_true',
+        help='Enable automatic archiving of stale branches/MRs that have exceeded '
+             'the cleanup period (stale_days + cleanup_weeks). This will: '
+             '1) Export branches to archive folder, '
+             '2) Close associated MRs, '
+             '3) Delete the branches.'
     )
 
     args = parser.parse_args()
@@ -1148,6 +1701,7 @@ def main() -> Optional[int]:
         logger.error(f"Configuration error: {e}")
         return 1
 
+    # Run notification first
     summary = notify_stale_branches(config, dry_run=args.dry_run)
 
     logger.info("=" * 50)
@@ -1160,6 +1714,44 @@ def main() -> Optional[int]:
     logger.info(f"Emails failed: {summary['emails_failed']}")
     if summary['recipients']:
         logger.info(f"Recipients: {', '.join(summary['recipients'])}")
+
+    # Run automatic archiving if enabled
+    if args.archive or config.get('enable_auto_archive', DEFAULT_ENABLE_AUTO_ARCHIVE):
+        logger.info("")
+        logger.info("=" * 50)
+        logger.info("Automatic Archiving")
+        logger.info("=" * 50)
+
+        archive_summary = perform_automatic_archiving(config, dry_run=args.dry_run)
+
+        logger.info(f"Items older than: {archive_summary['total_days']} days "
+                    f"({archive_summary['stale_days']} stale + "
+                    f"{archive_summary['cleanup_weeks']} weeks cleanup)")
+        logger.info(f"Branches archived: {archive_summary['branches_archived']}")
+        logger.info(f"Branches failed: {archive_summary['branches_failed']}")
+        logger.info(f"MRs archived: {archive_summary['mrs_archived']}")
+        logger.info(f"MRs failed: {archive_summary['mrs_failed']}")
+
+        if archive_summary['archived_items']:
+            logger.info("Archived items:")
+            for item in archive_summary['archived_items']:
+                if item['type'] == 'merge_request':
+                    logger.info(f"  - MR !{item['mr_iid']} ({item['project']}/{item['branch']})")
+                else:
+                    logger.info(f"  - Branch {item['project']}/{item['branch']}")
+
+        if archive_summary['failed_items']:
+            logger.warning("Failed items:")
+            for item in archive_summary['failed_items']:
+                if item['type'] == 'merge_request':
+                    logger.warning(
+                        f"  - MR !{item['mr_iid']} ({item['project']}/{item['branch']}): "
+                        f"{item['error']}"
+                    )
+                else:
+                    logger.warning(
+                        f"  - Branch {item['project']}/{item['branch']}: {item['error']}"
+                    )
 
     return 0
 
