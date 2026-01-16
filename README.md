@@ -4,14 +4,14 @@ A Python script that identifies stale branches and merge requests in GitLab proj
 
 ## Features
 
-- **Collect branches** from a list of GitLab projects
-- **Identify stale branches** where the last commit is older than a configurable number of days
-- **Detect open merge requests** for stale branches and notify about the MR instead of the branch
+- **Detect stale merge requests** based on any activity (commits, comments, reviews, etc.)
+- **Detect stale branches** where the last commit is older than a configurable number of days (if no MR exists)
+- **Smart MR activity detection** - checks both MR metadata updates and note/comment activity
 - **Smart email routing for MRs** - uses MR assignee, author, or fallback email for notifications
 - **Check committer status** - verifies if the committer's GitLab profile is active
 - **Smart email routing for branches** - uses fallback email if the committer's profile is inactive
 - **HTML email notifications** including:
-  - List of stale merge requests with project, MR link, and last update information
+  - List of stale merge requests with project, MR link, and last activity information
   - List of stale branches with project and commit information
   - Notification for cleanup action required
   - Warning about automatic cleanup after a configurable number of weeks
@@ -103,12 +103,12 @@ python stale_branch_notifier.py -v
 ## How It Works
 
 1. **Connects to GitLab** using the provided API token
-2. **Iterates through configured projects** and retrieves all branches
-3. **Filters out protected branches** (main, master, etc.)
-4. **Identifies stale branches** based on the last commit date
-5. **Checks for open merge requests** for each stale branch
-6. **For branches with MRs**: Groups by MR assignee/author email and sends MR notifications
-7. **For branches without MRs**: Groups by branch committer email
+2. **Iterates through configured projects** and retrieves all open merge requests
+3. **Identifies stale MRs** based on the latest activity (including notes/comments)
+4. **Filters out protected branches** (main, master, etc.)
+5. **Identifies stale branches** based on the last commit date (only for branches without open MRs)
+6. **For stale MRs**: Groups by MR assignee/author email and sends MR notifications
+7. **For stale branches without MRs**: Groups by branch committer email
 8. **Checks if users are active** in GitLab
 9. **Sends notification emails** to active users, or to fallback email for inactive users
 
