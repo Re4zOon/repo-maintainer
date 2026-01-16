@@ -137,8 +137,8 @@ docker compose run --rm repo-maintainer python stale_branch_mr_handler.py -c /ap
 To run the notifier on a schedule (e.g., daily), add a cron job on your host:
 
 ```bash
-# Run daily at 9:00 AM
-0 9 * * * cd /path/to/repo-maintainer && docker compose up --build
+# Run daily at 9:00 AM (omit --build if the image is already built)
+0 9 * * * cd /path/to/repo-maintainer && docker compose up
 ```
 
 ### Build and Run Manually with Docker
@@ -147,10 +147,10 @@ To run the notifier on a schedule (e.g., daily), add a cron job on your host:
 # Build the image
 docker build -t repo-maintainer .
 
-# Run the container
+# Run the container (run from the project directory)
 docker run --rm \
-  -v $(pwd)/config.yaml:/app/config.yaml:ro \
-  -v $(pwd)/data:/app/data \
+  -v ./config.yaml:/app/config.yaml:ro \
+  -v ./data:/app/data \
   repo-maintainer
 ```
 
