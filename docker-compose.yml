@@ -3,18 +3,8 @@ services:
     build: .
     container_name: repo-maintainer
     volumes:
-      # Mount config file and database directory
-      - ./config.yaml:/app/data/config.yaml:ro
+      # Mount config file (read-only)
+      - ./config.yaml:/app/config.yaml:ro
+      # Mount data directory for database persistence
       - ./data:/app/data
-    environment:
-      # Optional: Override config values via environment variables
-      # These can be used if you prefer environment variables over config file
-      - GITLAB_URL=${GITLAB_URL:-}
-      - GITLAB_TOKEN=${GITLAB_TOKEN:-}
-      - SMTP_HOST=${SMTP_HOST:-}
-      - SMTP_PORT=${SMTP_PORT:-}
-      - SMTP_USERNAME=${SMTP_USERNAME:-}
-      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
-      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-}
-      - FALLBACK_EMAIL=${FALLBACK_EMAIL:-}
     restart: "no"

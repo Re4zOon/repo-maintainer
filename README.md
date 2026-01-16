@@ -123,13 +123,13 @@ python stale_branch_mr_handler.py -v
 ### Run with Dry Run Mode
 
 ```bash
-docker compose run --rm repo-maintainer python stale_branch_mr_handler.py -c /app/data/config.yaml --dry-run
+docker compose run --rm repo-maintainer python stale_branch_mr_handler.py -c /app/config.yaml --dry-run
 ```
 
 ### Run with Verbose Output
 
 ```bash
-docker compose run --rm repo-maintainer python stale_branch_mr_handler.py -c /app/data/config.yaml -v
+docker compose run --rm repo-maintainer python stale_branch_mr_handler.py -c /app/config.yaml -v
 ```
 
 ### Scheduled Execution with Cron
@@ -149,7 +149,7 @@ docker build -t repo-maintainer .
 
 # Run the container
 docker run --rm \
-  -v $(pwd)/config.yaml:/app/data/config.yaml:ro \
+  -v $(pwd)/config.yaml:/app/config.yaml:ro \
   -v $(pwd)/data:/app/data \
   repo-maintainer
 ```
