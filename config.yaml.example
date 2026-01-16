@@ -77,3 +77,31 @@ enable_auto_archive: false
 # Each archived branch is saved as: {project_name}_{branch_name}_{timestamp}.tar.gz
 # Default: ./archived_branches
 archive_folder: "./archived_branches"
+
+# =============================================================================
+# MR Reminder Comments Settings
+# =============================================================================
+# When enabled, the bot will post friendly reminder comments directly on stale
+# merge requests for increased visibility. This is in addition to email
+# notifications and does not affect archiving behavior.
+#
+# Comments are posted when:
+# 1. The MR has been inactive for at least mr_comment_inactivity_days (X days)
+# 2. The bot hasn't commented on this MR in the last mr_comment_frequency_days (Y days)
+#
+# The comments are designed to be clear and friendly (with a touch of humor)
+# to encourage action without being annoying.
+
+# Enable MR reminder comments (default: false)
+enable_mr_comments: false
+
+# Number of days of inactivity before posting the first comment (X days)
+# An MR is considered inactive if there are no commits, comments, or updates
+# Default: 14
+mr_comment_inactivity_days: 14
+
+# Frequency of posting new comments (Y days)
+# After the first comment, a new comment will be posted every Y days
+# if the MR remains inactive
+# Default: 7
+mr_comment_frequency_days: 7

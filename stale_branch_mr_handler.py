@@ -118,6 +118,39 @@ DEFAULT_DATABASE_PATH = "./notification_history.db"
 DEFAULT_ARCHIVE_FOLDER = "./archived_branches"
 DEFAULT_ENABLE_AUTO_ARCHIVE = False
 
+# Default configuration values for MR comments
+DEFAULT_ENABLE_MR_COMMENTS = False
+DEFAULT_MR_COMMENT_INACTIVITY_DAYS = 14
+DEFAULT_MR_COMMENT_FREQUENCY_DAYS = 7
+
+# List of funny reminder comments for stale MRs
+MR_REMINDER_COMMENTS = [
+    "👋 Hey there! This MR has been gathering digital dust for a while. "
+    "Just a friendly nudge to see if it still needs attention. "
+    "The code misses you! 🥺",
+
+    "🦥 *sloth mode detected* This MR has been moving slower than a sloth "
+    "on a lazy Sunday. Time to pick up the pace or let it rest in peace? 🪦",
+
+    "🧹 The cleanup bot is back! This MR hasn't had any activity recently. "
+    "Don't worry, I'm not here to judge, just to remind. Maybe merge it? Maybe close it? "
+    "The suspense is killing me! 😅",
+
+    "🕸️ *blows away cobwebs* Hello? Anyone there? This MR is starting to feel "
+    "like an abandoned haunted house. Let's either bring it back to life or give it a proper burial! 👻",
+
+    "⏰ Tick-tock! This MR is aging like fine wine... or maybe like milk? 🥛 "
+    "Either way, it could use some love. Your future self will thank you! 🙏",
+
+    "🌱 This MR planted its roots here a while ago but hasn't grown much. "
+    "A little watering (review/update) could help it blossom! 🌸 "
+    "Or maybe it's time to pull the weeds? 🌿",
+
+    "🎵 *Plays 'Hello' by Adele* Hello from the other siiiide... "
+    "This MR has been waiting for attention. At least it called a thousand times... "
+    "Okay, maybe just this once. 📞",
+]
+
 
 class ConfigurationError(Exception):
     """Raised when configuration is invalid or missing required fields."""
@@ -151,6 +184,23 @@ def init_database(db_path: str) -> None:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_notification_lookup
             ON notification_history(recipient_email, item_type, project_id, item_key)
+        ''')
+
+        # Create table for tracking MR comments
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS mr_comment_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                mr_iid INTEGER NOT NULL,
+                comment_index INTEGER NOT NULL,
+                last_commented_at DATETIME NOT NULL,
+                UNIQUE(project_id, mr_iid)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_mr_comment_lookup
+            ON mr_comment_history(project_id, mr_iid)
         ''')
 
         conn.commit()
@@ -373,6 +423,279 @@ def record_notifications_for_items(
         record_notification(
             db_path, recipient_email, 'merge_request', project_id, mr_iid, notification_time
         )
+
+
+# =============================================================================
+# MR Comment Functions
+# =============================================================================
+
+
+def get_last_mr_comment_info(
+    db_path: str,
+    project_id: int,
+    mr_iid: int
+) -> Optional[tuple]:
+    """
+    Get the last comment information for a specific MR.
+
+    Args:
+        db_path: Path to the SQLite database file
+        project_id: GitLab project ID
+        mr_iid: Merge request internal ID
+
+    Returns:
+        Tuple of (last_commented_at, comment_index) or None if never commented
+    """
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT last_commented_at, comment_index FROM mr_comment_history
+            WHERE project_id = ? AND mr_iid = ?
+        ''', (project_id, mr_iid))
+
+        row = cursor.fetchone()
+
+    if row:
+        return (datetime.fromisoformat(row[0]), row[1])
+    return None
+
+
+def record_mr_comment(
+    db_path: str,
+    project_id: int,
+    mr_iid: int,
+    comment_index: int,
+    comment_time: Optional[datetime] = None
+) -> None:
+    """
+    Record that a comment was posted to a specific MR.
+
+    Args:
+        db_path: Path to the SQLite database file
+        project_id: GitLab project ID
+        mr_iid: Merge request internal ID
+        comment_index: Index of the comment used from MR_REMINDER_COMMENTS
+        comment_time: Time of comment (defaults to now)
+    """
+    if comment_time is None:
+        comment_time = datetime.now(timezone.utc)
+
+    time_str = comment_time.isoformat()
+
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            INSERT INTO mr_comment_history
+                (project_id, mr_iid, comment_index, last_commented_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(project_id, mr_iid)
+            DO UPDATE SET
+                comment_index = excluded.comment_index,
+                last_commented_at = excluded.last_commented_at
+        ''', (project_id, mr_iid, comment_index, time_str))
+
+        conn.commit()
+
+
+def should_post_mr_comment(
+    db_path: str,
+    project_id: int,
+    mr_iid: int,
+    mr_last_activity: Optional[datetime],
+    inactivity_days: int,
+    frequency_days: int
+) -> bool:
+    """
+    Determine if a reminder comment should be posted to an MR.
+
+    A comment should be posted if:
+    1. The MR has been inactive for at least inactivity_days
+    2. No comment has been posted by this bot, OR the last comment was at least
+       frequency_days ago
+
+    Args:
+        db_path: Path to the SQLite database file
+        project_id: GitLab project ID
+        mr_iid: Merge request internal ID
+        mr_last_activity: Last activity datetime of the MR
+        inactivity_days: Days of inactivity before posting first comment
+        frequency_days: Days between subsequent comments
+
+    Returns:
+        True if a comment should be posted, False otherwise
+    """
+    if mr_last_activity is None:
+        return False
+
+    # Check if MR has been inactive long enough for a comment
+    inactivity_cutoff = datetime.now(timezone.utc) - timedelta(days=inactivity_days)
+    if mr_last_activity > inactivity_cutoff:
+        return False
+
+    # Check last comment info
+    comment_info = get_last_mr_comment_info(db_path, project_id, mr_iid)
+
+    if comment_info is None:
+        # Never commented before, should post
+        return True
+
+    last_commented_at, _ = comment_info
+    frequency_cutoff = datetime.now(timezone.utc) - timedelta(days=frequency_days)
+
+    # Post if enough time has passed since last comment
+    return last_commented_at < frequency_cutoff
+
+
+def get_next_comment_index(
+    db_path: str,
+    project_id: int,
+    mr_iid: int
+) -> int:
+    """
+    Get the next comment index to use for an MR.
+
+    Cycles through the available comments to provide variety.
+
+    Args:
+        db_path: Path to the SQLite database file
+        project_id: GitLab project ID
+        mr_iid: Merge request internal ID
+
+    Returns:
+        Index of the next comment to use
+    """
+    comment_info = get_last_mr_comment_info(db_path, project_id, mr_iid)
+
+    if comment_info is None:
+        return 0
+
+    _, last_index = comment_info
+    # Cycle to the next comment
+    return (last_index + 1) % len(MR_REMINDER_COMMENTS)
+
+
+def post_mr_reminder_comment(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    mr_iid: int,
+    comment_text: str,
+    dry_run: bool = False
+) -> bool:
+    """
+    Post a reminder comment to a merge request.
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        mr_iid: Merge request internal ID
+        comment_text: Text of the comment to post
+        dry_run: If True, don't actually post the comment
+
+    Returns:
+        True if comment was posted successfully, False otherwise
+    """
+    try:
+        project = gl.projects.get(project_id)
+        mr = project.mergerequests.get(mr_iid)
+
+        if dry_run:
+            logger.info(f"[DRY RUN] Would post reminder comment to MR !{mr_iid} in project {project_id}")
+            logger.debug(f"Comment text: {comment_text[:100]}...")
+            return True
+
+        mr.notes.create({'body': comment_text})
+        logger.info(f"Posted reminder comment to MR !{mr_iid} in project {project_id}")
+        return True
+
+    except gitlab.exceptions.GitlabError as e:
+        logger.error(f"Error posting comment to MR !{mr_iid} in project {project_id}: {e}")
+        return False
+
+
+def process_stale_mr_comments(
+    gl: gitlab.Gitlab,
+    config: dict,
+    dry_run: bool = False
+) -> dict:
+    """
+    Process stale MRs and post reminder comments where appropriate.
+
+    This function:
+    1. Identifies stale MRs based on inactivity_days config
+    2. Checks if a reminder comment should be posted (based on frequency_days)
+    3. Posts comments to MRs that need them
+    4. Records the comments in the database
+
+    Args:
+        gl: Authenticated GitLab client
+        config: Configuration dictionary
+        dry_run: If True, don't actually post comments
+
+    Returns:
+        Summary of comment operations
+    """
+    inactivity_days = config.get('mr_comment_inactivity_days', DEFAULT_MR_COMMENT_INACTIVITY_DAYS)
+    frequency_days = config.get('mr_comment_frequency_days', DEFAULT_MR_COMMENT_FREQUENCY_DAYS)
+    db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
+    project_ids = config.get('projects', [])
+
+    summary = {
+        'comments_posted': 0,
+        'comments_skipped': 0,
+        'comments_failed': 0,
+        'commented_mrs': []
+    }
+
+    for project_id in project_ids:
+        try:
+            # Get stale MRs using the inactivity_days threshold
+            stale_mrs = get_stale_merge_requests(gl, project_id, inactivity_days)
+
+            for mr_info in stale_mrs:
+                mr_iid = mr_info['iid']
+                mr_last_activity = mr_info.get('updated_at')
+
+                # Check if we should post a comment
+                if not should_post_mr_comment(
+                    db_path, project_id, mr_iid, mr_last_activity, inactivity_days, frequency_days
+                ):
+                    summary['comments_skipped'] += 1
+                    logger.debug(
+                        f"Skipping comment for MR !{mr_iid} in project {project_id} - "
+                        f"already commented recently"
+                    )
+                    continue
+
+                # Get the next comment to use
+                comment_index = get_next_comment_index(db_path, project_id, mr_iid)
+                comment_text = MR_REMINDER_COMMENTS[comment_index]
+
+                # Post the comment
+                if post_mr_reminder_comment(gl, project_id, mr_iid, comment_text, dry_run=dry_run):
+                    summary['comments_posted'] += 1
+                    summary['commented_mrs'].append({
+                        'project_id': project_id,
+                        'project_name': mr_info.get('project_name', 'Unknown'),
+                        'mr_iid': mr_iid,
+                        'mr_title': mr_info.get('title', 'Unknown'),
+                    })
+                    # Record the comment (unless dry run)
+                    if not dry_run:
+                        record_mr_comment(db_path, project_id, mr_iid, comment_index)
+                else:
+                    summary['comments_failed'] += 1
+
+        except gitlab.exceptions.GitlabGetError as e:
+            logger.error(f"Failed to get project {project_id}: {e}")
+
+    return summary
+
+
+# =============================================================================
+# End of MR Comment Functions
+# =============================================================================
 
 
 def validate_config(config: dict) -> None:
@@ -1714,6 +2037,31 @@ def main() -> Optional[int]:
     logger.info(f"Emails failed: {summary['emails_failed']}")
     if summary['recipients']:
         logger.info(f"Recipients: {', '.join(summary['recipients'])}")
+
+    # Run MR commenting if enabled
+    if config.get('enable_mr_comments', DEFAULT_ENABLE_MR_COMMENTS):
+        logger.info("")
+        logger.info("=" * 50)
+        logger.info("MR Reminder Comments")
+        logger.info("=" * 50)
+
+        # Create GitLab client for comment posting
+        gl = create_gitlab_client(config)
+        comment_summary = process_stale_mr_comments(gl, config, dry_run=args.dry_run)
+
+        inactivity_days = config.get('mr_comment_inactivity_days', DEFAULT_MR_COMMENT_INACTIVITY_DAYS)
+        frequency_days = config.get('mr_comment_frequency_days', DEFAULT_MR_COMMENT_FREQUENCY_DAYS)
+
+        logger.info(f"Inactivity threshold: {inactivity_days} days")
+        logger.info(f"Comment frequency: every {frequency_days} days")
+        logger.info(f"Comments posted: {comment_summary['comments_posted']}")
+        logger.info(f"Comments skipped (already commented recently): {comment_summary['comments_skipped']}")
+        logger.info(f"Comments failed: {comment_summary['comments_failed']}")
+
+        if comment_summary['commented_mrs']:
+            logger.info("MRs commented:")
+            for mr in comment_summary['commented_mrs']:
+                logger.info(f"  - !{mr['mr_iid']} in {mr['project_name']}: {mr['mr_title']}")
 
     # Run automatic archiving if enabled
     if args.archive or config.get('enable_auto_archive', DEFAULT_ENABLE_AUTO_ARCHIVE):
