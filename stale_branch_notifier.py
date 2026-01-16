@@ -1101,7 +1101,7 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
         if success:
             summary['emails_sent'] += 1
             summary['recipients'].append(email)
-            # Record notifications in database (even for dry run to test the flow)
+            # Record notifications in database (only when actually sending)
             if not dry_run:
                 record_notifications_for_items(db_path, email, items)
         else:

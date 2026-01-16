@@ -1106,15 +1106,14 @@ class TestNotificationDatabase(unittest.TestCase):
         import sqlite3
         stale_branch_notifier.init_database(self.db_path)
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
 
-        # Check that the table exists
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='notification_history'"
-        )
-        result = cursor.fetchone()
-        conn.close()
+            # Check that the table exists
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='notification_history'"
+            )
+            result = cursor.fetchone()
 
         self.assertIsNotNone(result)
         self.assertEqual(result[0], 'notification_history')
