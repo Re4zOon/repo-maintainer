@@ -1,5 +1,8 @@
 """Tests for the GitLab Stale Branch Notifier."""
 
+import os
+import shutil
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -1090,15 +1093,11 @@ class TestNotificationDatabase(unittest.TestCase):
 
     def setUp(self):
         """Set up test database."""
-        import tempfile
-        import os
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
 
     def tearDown(self):
         """Clean up test database."""
-        import os
-        import shutil
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
@@ -1208,16 +1207,12 @@ class TestShouldSendNotification(unittest.TestCase):
 
     def setUp(self):
         """Set up test database."""
-        import tempfile
-        import os
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
         stale_branch_notifier.init_database(self.db_path)
 
     def tearDown(self):
         """Clean up test database."""
-        import os
-        import shutil
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
@@ -1354,16 +1349,12 @@ class TestRecordNotificationsForItems(unittest.TestCase):
 
     def setUp(self):
         """Set up test database."""
-        import tempfile
-        import os
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
         stale_branch_notifier.init_database(self.db_path)
 
     def tearDown(self):
         """Clean up test database."""
-        import os
-        import shutil
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
@@ -1427,15 +1418,11 @@ class TestNotifyWithThrottling(unittest.TestCase):
 
     def setUp(self):
         """Set up test database."""
-        import tempfile
-        import os
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, 'test_notifications.db')
 
     def tearDown(self):
         """Clean up test database."""
-        import os
-        import shutil
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 

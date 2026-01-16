@@ -121,29 +121,28 @@ def init_database(db_path: str) -> None:
     Args:
         db_path: Path to the SQLite database file
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS notification_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            recipient_email TEXT NOT NULL,
-            item_type TEXT NOT NULL,
-            project_id INTEGER NOT NULL,
-            item_key TEXT NOT NULL,
-            first_found_at DATETIME NOT NULL,
-            last_notified_at DATETIME NOT NULL,
-            UNIQUE(recipient_email, item_type, project_id, item_key)
-        )
-    ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS notification_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recipient_email TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                project_id INTEGER NOT NULL,
+                item_key TEXT NOT NULL,
+                first_found_at DATETIME NOT NULL,
+                last_notified_at DATETIME NOT NULL,
+                UNIQUE(recipient_email, item_type, project_id, item_key)
+            )
+        ''')
 
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_notification_lookup
-        ON notification_history(recipient_email, item_type, project_id, item_key)
-    ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_notification_lookup
+            ON notification_history(recipient_email, item_type, project_id, item_key)
+        ''')
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
 
 def get_last_notification_date(
@@ -166,16 +165,15 @@ def get_last_notification_date(
     Returns:
         datetime of last notification or None if never notified
     """
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
 
-    cursor.execute('''
-        SELECT last_notified_at FROM notification_history
-        WHERE recipient_email = ? AND item_type = ? AND project_id = ? AND item_key = ?
-    ''', (recipient_email, item_type, project_id, str(item_key)))
+        cursor.execute('''
+            SELECT last_notified_at FROM notification_history
+            WHERE recipient_email = ? AND item_type = ? AND project_id = ? AND item_key = ?
+        ''', (recipient_email, item_type, project_id, str(item_key)))
 
-    row = cursor.fetchone()
-    conn.close()
+        row = cursor.fetchone()
 
     if row:
         return datetime.fromisoformat(row[0])
@@ -210,26 +208,24 @@ def record_notification(
     # Format datetime as ISO string for storage
     time_str = notification_time.isoformat()
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
 
-    cursor.execute('''
-        INSERT INTO notification_history
-            (recipient_email, item_type, project_id, item_key, first_found_at, last_notified_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(recipient_email, item_type, project_id, item_key)
-        DO UPDATE SET last_notified_at = excluded.last_notified_at
-    ''', (recipient_email, item_type, project_id, str(item_key), time_str, time_str))
+        cursor.execute('''
+            INSERT INTO notification_history
+                (recipient_email, item_type, project_id, item_key, first_found_at, last_notified_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(recipient_email, item_type, project_id, item_key)
+            DO UPDATE SET last_notified_at = excluded.last_notified_at
+        ''', (recipient_email, item_type, project_id, str(item_key), time_str, time_str))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
 
 def has_new_items_for_recipient(
     db_path: str,
     recipient_email: str,
-    items: dict,
-    frequency_days: int
+    items: dict
 ) -> bool:
     """
     Check if there are any new items for a recipient that haven't been notified.
@@ -241,7 +237,6 @@ def has_new_items_for_recipient(
         db_path: Path to the SQLite database file
         recipient_email: Email address of the recipient
         items: Dictionary with 'branches' and 'merge_requests' lists
-        frequency_days: Number of days between notifications
 
     Returns:
         True if there are new (never-notified) items, False otherwise
@@ -299,7 +294,7 @@ def should_send_notification(
         return False
 
     # Check if there are any new (never-notified) items
-    if has_new_items_for_recipient(db_path, recipient_email, items, frequency_days):
+    if has_new_items_for_recipient(db_path, recipient_email, items):
         return True
 
     # Check if enough time has passed since the last notification for any item
