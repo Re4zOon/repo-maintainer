@@ -2622,8 +2622,7 @@ class TestParallelProcessing(unittest.TestCase):
             'projects': [1, 2]
         }
         
-        # The default should be used when max_workers is not in config
-        max_workers = config.get('max_workers', stale_branch_mr_handler.DEFAULT_MAX_WORKERS)
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
         self.assertEqual(max_workers, 4)
 
     def test_max_workers_can_be_configured(self):
@@ -2635,8 +2634,68 @@ class TestParallelProcessing(unittest.TestCase):
             'max_workers': 8
         }
         
-        max_workers = config.get('max_workers', stale_branch_mr_handler.DEFAULT_MAX_WORKERS)
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
         self.assertEqual(max_workers, 8)
+
+    def test_max_workers_invalid_type_falls_back_to_default(self):
+        """Test that invalid type for max_workers falls back to default."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 'invalid'
+        }
+        
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+        self.assertEqual(max_workers, 4)
+
+    def test_max_workers_negative_value_clamped_to_1(self):
+        """Test that negative max_workers value is clamped to 1."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': -5
+        }
+        
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+        self.assertEqual(max_workers, 1)
+
+    def test_max_workers_zero_value_clamped_to_1(self):
+        """Test that zero max_workers value is clamped to 1."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 0
+        }
+        
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+        self.assertEqual(max_workers, 1)
+
+    def test_max_workers_too_large_value_clamped_to_32(self):
+        """Test that too large max_workers value is clamped to 32."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 100
+        }
+        
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+        self.assertEqual(max_workers, 32)
+
+    def test_max_workers_float_converted_to_int(self):
+        """Test that float max_workers value is converted to int."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 6.7
+        }
+        
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+        self.assertEqual(max_workers, 6)
 
 
 if __name__ == '__main__':

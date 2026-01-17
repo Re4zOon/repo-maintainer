@@ -976,6 +976,9 @@ def process_stale_mr_comments(
     }
 
     # Process projects in parallel for better performance
+    # Note: python-gitlab library is generally thread-safe for read operations.
+    # The shared GitLab client (gl) is used across threads for API calls.
+    # If you encounter issues with your GitLab version, consider reducing max_workers.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all project processing tasks
         future_to_project = {
@@ -1825,6 +1828,9 @@ def get_branches_ready_for_archiving(
     all_mrs_to_archive = []
 
     # Process projects in parallel for better performance
+    # Note: python-gitlab library is generally thread-safe for read operations.
+    # The shared GitLab client (gl) is used across threads for API calls.
+    # If you encounter issues with your GitLab version, consider reducing max_workers.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all project processing tasks
         future_to_project = {
@@ -2170,6 +2176,9 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     all_skipped_items = []
 
     # Process projects in parallel for better performance with large numbers of projects
+    # Note: python-gitlab library is generally thread-safe for read operations.
+    # The shared GitLab client (gl) is used across threads for API calls.
+    # If you encounter issues with your GitLab version, consider reducing max_workers.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all project processing tasks
         future_to_project = {

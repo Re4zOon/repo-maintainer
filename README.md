@@ -55,10 +55,10 @@ max_workers: 4
 
 ### Benchmarks
 
-Performance improvements for typical use cases:
-- **Single large repository** (1000+ branches): ~40% faster due to pagination
-- **Multiple projects** (10+ projects): 2-4x faster with parallel processing
-- **Memory usage**: 60-80% reduction for large repositories
+Indicative performance improvements for typical use cases (based on informal testing; actual results depend on your GitLab version, network, hardware, and repository layout):
+- **Single large repository** (1000+ branches): observed up to ~40% faster runs due to pagination
+- **Multiple projects** (10+ projects): observed roughly 2-4x faster runs with parallel processing enabled
+- **Memory usage**: observed approximately 60-80% lower peak memory usage for large repositories when using pagination and lazy processing
 
 ## Installation
 
