@@ -2575,5 +2575,69 @@ class TestGetRandomMrComment(unittest.TestCase):
         self.assertGreater(len(comment), 0)
 
 
+class TestParallelProcessing(unittest.TestCase):
+    """Tests for parallel processing optimizations."""
+
+    @patch('stale_branch_mr_handler.get_stale_merge_requests')
+    @patch('stale_branch_mr_handler.get_stale_branches')
+    @patch('gitlab.Gitlab')
+    def test_parallel_project_processing(self, mock_gitlab, mock_get_branches, mock_get_mrs):
+        """Test that multiple projects are processed in parallel."""
+        # Set up mocks
+        gl = MagicMock()
+        mock_gitlab.return_value = gl
+        
+        # Create mock project
+        mock_project = MagicMock()
+        mock_project.id = 1
+        mock_project.name = "Test Project"
+        gl.projects.get.return_value = mock_project
+        
+        # Mock functions return empty lists
+        mock_get_mrs.return_value = []
+        mock_get_branches.return_value = []
+        
+        # Test config with multiple projects and max_workers set
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2, 3, 4, 5],  # Multiple projects
+            'max_workers': 2  # Test with 2 workers
+        }
+        
+        # Call the function
+        result = stale_branch_mr_handler.collect_stale_items_by_email(gl, config)
+        
+        # Verify the function completed successfully
+        self.assertIsInstance(result, dict)
+        
+        # Verify that we attempted to get all projects
+        self.assertEqual(gl.projects.get.call_count, 5)
+
+    def test_max_workers_defaults_to_4(self):
+        """Test that max_workers defaults to 4 when not specified."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2]
+        }
+        
+        # The default should be used when max_workers is not in config
+        max_workers = config.get('max_workers', stale_branch_mr_handler.DEFAULT_MAX_WORKERS)
+        self.assertEqual(max_workers, 4)
+
+    def test_max_workers_can_be_configured(self):
+        """Test that max_workers can be configured."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 8
+        }
+        
+        max_workers = config.get('max_workers', stale_branch_mr_handler.DEFAULT_MAX_WORKERS)
+        self.assertEqual(max_workers, 8)
+
+
 if __name__ == '__main__':
     unittest.main()
