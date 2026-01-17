@@ -187,7 +187,7 @@
                 <tr>
                     <td>${escapeHtml(n.recipient)}</td>
                     <td><span class="badge badge-${escapeHtml(n.type)}">${escapeHtml(n.type)}</span></td>
-                    <td>${n.project_id}</td>
+                    <td>${escapeHtml(String(n.project_id))}</td>
                     <td>${escapeHtml(n.item)}</td>
                     <td>${formatDate(n.notified_at)}</td>
                 </tr>
@@ -201,9 +201,9 @@
         } else {
             commentsBody.innerHTML = stats.mr_comments.recent.map(c => `
                 <tr>
-                    <td>${c.project_id}</td>
-                    <td>!${c.mr_iid}</td>
-                    <td>#${c.comment_index + 1}</td>
+                    <td>${escapeHtml(String(c.project_id))}</td>
+                    <td>!${escapeHtml(String(c.mr_iid))}</td>
+                    <td>#${escapeHtml(String(c.comment_index + 1))}</td>
                     <td>${formatDate(c.commented_at)}</td>
                 </tr>
             `).join('');
