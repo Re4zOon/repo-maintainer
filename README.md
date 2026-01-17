@@ -156,6 +156,99 @@ The comments are designed to be clear and encourage action while keeping things 
 
 > 🧹 The cleanup bot is back! This MR hasn't had any activity recently. Don't worry, I'm not here to judge, just to remind. Maybe merge it? Maybe close it? The suspense is killing me! 😅
 
+## WebUI for Monitoring and Configuration
+
+The tool includes a web-based interface for monitoring statistics and managing configuration. The WebUI provides:
+
+- **Dashboard** with real-time statistics on notifications and MR comments
+- **Configuration management** to update settings without editing files
+- **Dark mode** support for comfortable viewing
+- **Responsive design** that works on desktop and mobile
+
+### Running the WebUI
+
+#### With Docker Compose (Recommended)
+
+The WebUI runs as a separate service in Docker Compose:
+
+```bash
+# Create a .env file with your credentials (required)
+echo "WEBUI_USERNAME=your-username" > .env
+echo "WEBUI_PASSWORD=your-secure-password" >> .env
+
+# Start both the CLI tool and WebUI
+docker compose up --build
+
+# Or start just the WebUI
+docker compose up repo-maintainer-webui --build
+```
+
+Access the WebUI at: `http://localhost:5000`
+
+**Important:** The WebUI requires authentication credentials to be set via environment variables. Create a `.env` file or export the variables:
+
+```bash
+# Required environment variables
+export WEBUI_USERNAME=your-username
+export WEBUI_PASSWORD=your-secure-password
+
+# Optional: Set a secure secret key (auto-generated if not set)
+export WEBUI_SECRET_KEY=your-secret-key
+```
+
+#### Running Locally
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the WebUI
+python -m webui.app -c config.yaml
+
+# With custom port
+python -m webui.app -c config.yaml --port 8080
+
+# In debug mode
+python -m webui.app -c config.yaml --debug
+```
+
+### WebUI Features
+
+#### Dashboard
+- Total notifications sent (branches and MRs)
+- MR comments posted
+- Current configuration summary
+- Recent notification history
+- Export statistics as JSON
+
+#### Configuration
+- Update stale detection settings
+- Configure notification frequency
+- Enable/disable auto-archive and MR comments
+- Manage monitored projects
+
+Note: Sensitive settings (API tokens, passwords) cannot be modified through the WebUI for security reasons.
+
+### WebUI API Endpoints
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/api/health` | GET | No | Health check |
+| `/api/stats` | GET | Yes | Get statistics |
+| `/api/config` | GET | Yes | Get configuration (sanitized) |
+| `/api/config` | PUT | Yes | Update configuration |
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WEBUI_HOST` | Docker: `0.0.0.0` (local: `127.0.0.1`) | Host to bind the server |
+| `WEBUI_PORT` | `5000` | Port for the WebUI |
+| `WEBUI_USERNAME` | `admin` | Username for authentication (default for local runs; Docker deployments must set this explicitly) |
+| `WEBUI_PASSWORD` | `admin` | Password for authentication (default for local runs; Docker deployments must set this explicitly) |
+| `WEBUI_SECRET_KEY` | - | Secret key for sessions (auto-generated if not set) |
+| `CONFIG_PATH` | `config.yaml` | Path to config file |
+
 ## Docker Deployment
 
 ### Quick Start with Docker Compose

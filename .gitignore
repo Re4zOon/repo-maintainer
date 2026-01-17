@@ -65,6 +65,7 @@ env/
 
 # Config files with secrets
 config.local.yaml
+config.yaml
 
 # SQLite notification database
 notification_history.db
