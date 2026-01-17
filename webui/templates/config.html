@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+
+{% block title %}Configuration - Repo Maintainer{% endblock %}
+
+{% block content %}
+<div class="config-page">
+    <h2>⚙️ Configuration</h2>
+
+    <div class="alert alert-info">
+        <strong>ℹ️ Note:</strong> Sensitive fields (API tokens, passwords) cannot be modified through the WebUI for security reasons. 
+        Please edit the configuration file directly for those changes.
+    </div>
+
+    <form id="config-form">
+        <div class="form-section">
+            <h3>🌿 Stale Detection Settings</h3>
+            
+            <div class="form-group">
+                <label for="stale_days">Stale Days</label>
+                <input type="number" id="stale_days" name="stale_days" min="1" max="365">
+                <small>Number of days after which a branch/MR is considered stale</small>
+            </div>
+
+            <div class="form-group">
+                <label for="cleanup_weeks">Cleanup Weeks</label>
+                <input type="number" id="cleanup_weeks" name="cleanup_weeks" min="1" max="52">
+                <small>Number of weeks until automatic cleanup/archiving after stale notification</small>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>📧 Notification Settings</h3>
+            
+            <div class="form-group">
+                <label for="notification_frequency_days">Notification Frequency (days)</label>
+                <input type="number" id="notification_frequency_days" name="notification_frequency_days" min="1" max="90">
+                <small>Minimum days between notifications to the same recipient</small>
+            </div>
+
+            <div class="form-group">
+                <label for="fallback_email">Fallback Email</label>
+                <input type="email" id="fallback_email" name="fallback_email">
+                <small>Email address for notifications when committer is inactive</small>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>🗄️ Archive Settings</h3>
+            
+            <div class="form-group checkbox-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="enable_auto_archive" name="enable_auto_archive">
+                    <span>Enable Auto Archive</span>
+                </label>
+                <small>Automatically archive very old stale branches and MRs</small>
+            </div>
+
+            <div class="form-group">
+                <label for="archive_folder">Archive Folder</label>
+                <input type="text" id="archive_folder" name="archive_folder">
+                <small>Local folder to store archived branches</small>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>💬 MR Comment Settings</h3>
+            
+            <div class="form-group checkbox-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="enable_mr_comments" name="enable_mr_comments">
+                    <span>Enable MR Comments</span>
+                </label>
+                <small>Post reminder comments directly on stale merge requests</small>
+            </div>
+
+            <div class="form-group">
+                <label for="mr_comment_inactivity_days">MR Comment Inactivity Days</label>
+                <input type="number" id="mr_comment_inactivity_days" name="mr_comment_inactivity_days" min="1" max="90">
+                <small>Days of inactivity before posting the first comment</small>
+            </div>
+
+            <div class="form-group">
+                <label for="mr_comment_frequency_days">MR Comment Frequency (days)</label>
+                <input type="number" id="mr_comment_frequency_days" name="mr_comment_frequency_days" min="1" max="90">
+                <small>Days between subsequent reminder comments</small>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>📂 Monitored Projects</h3>
+            
+            <div class="form-group">
+                <label for="projects">Project IDs</label>
+                <textarea id="projects" name="projects" rows="4" placeholder="One project ID per line"></textarea>
+                <small>GitLab project IDs to monitor (one per line)</small>
+            </div>
+        </div>
+
+        <div class="form-section readonly-section">
+            <h3>🔒 Read-Only Settings</h3>
+            <p class="section-note">These settings cannot be modified through the WebUI for security reasons.</p>
+            
+            <div class="form-group">
+                <label>GitLab URL</label>
+                <input type="text" id="gitlab_url" readonly disabled>
+            </div>
+
+            <div class="form-group">
+                <label>GitLab Token</label>
+                <input type="text" id="gitlab_token" value="••••••••" readonly disabled>
+            </div>
+
+            <div class="form-group">
+                <label>SMTP Host</label>
+                <input type="text" id="smtp_host" readonly disabled>
+            </div>
+
+            <div class="form-group">
+                <label>SMTP From Email</label>
+                <input type="text" id="smtp_from" readonly disabled>
+            </div>
+
+            <div class="form-group">
+                <label>Database Path</label>
+                <input type="text" id="database_path" readonly disabled>
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">💾 Save Changes</button>
+            <button type="button" id="reset-form" class="btn btn-secondary">↩️ Reset</button>
+        </div>
+    </form>
+
+    <div id="save-status" class="save-status hidden"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let originalConfig = null;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        loadConfig();
+    });
+
+    document.getElementById('config-form').addEventListener('submit', saveConfig);
+    document.getElementById('reset-form').addEventListener('click', resetForm);
+
+    function loadConfig() {
+        fetch('/api/config')
+            .then(response => {
+                if (response.status === 401) {
+                    window.location.reload();
+                    return;
+                }
+                return response.json();
+            })
+            .then(data => {
+                originalConfig = data;
+                populateForm(data);
+            })
+            .catch(error => {
+                console.error('Error loading config:', error);
+                showStatus('Error loading configuration', 'error');
+            });
+    }
+
+    function populateForm(config) {
+        // Editable fields
+        document.getElementById('stale_days').value = config.stale_days || 30;
+        document.getElementById('cleanup_weeks').value = config.cleanup_weeks || 4;
+        document.getElementById('notification_frequency_days').value = config.notification_frequency_days || 7;
+        document.getElementById('fallback_email').value = config.fallback_email || '';
+        document.getElementById('enable_auto_archive').checked = config.enable_auto_archive || false;
+        document.getElementById('archive_folder').value = config.archive_folder || './archived_branches';
+        document.getElementById('enable_mr_comments').checked = config.enable_mr_comments || false;
+        document.getElementById('mr_comment_inactivity_days').value = config.mr_comment_inactivity_days || 14;
+        document.getElementById('mr_comment_frequency_days').value = config.mr_comment_frequency_days || 7;
+        
+        // Projects
+        document.getElementById('projects').value = (config.projects || []).join('\n');
+
+        // Read-only fields
+        document.getElementById('gitlab_url').value = config.gitlab?.url || '';
+        document.getElementById('gitlab_token').value = config.gitlab?.has_token ? '••••••••' : '(not set)';
+        document.getElementById('smtp_host').value = config.smtp?.host || '';
+        document.getElementById('smtp_from').value = config.smtp?.from_email || '';
+        document.getElementById('database_path').value = config.database_path || '';
+    }
+
+    function saveConfig(e) {
+        e.preventDefault();
+
+        // Gather form data
+        const projectsText = document.getElementById('projects').value.trim();
+        const projectIds = projectsText 
+            ? projectsText.split('\n').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p))
+            : [];
+
+        const updates = {
+            stale_days: parseInt(document.getElementById('stale_days').value, 10),
+            cleanup_weeks: parseInt(document.getElementById('cleanup_weeks').value, 10),
+            notification_frequency_days: parseInt(document.getElementById('notification_frequency_days').value, 10),
+            fallback_email: document.getElementById('fallback_email').value,
+            enable_auto_archive: document.getElementById('enable_auto_archive').checked,
+            archive_folder: document.getElementById('archive_folder').value,
+            enable_mr_comments: document.getElementById('enable_mr_comments').checked,
+            mr_comment_inactivity_days: parseInt(document.getElementById('mr_comment_inactivity_days').value, 10),
+            mr_comment_frequency_days: parseInt(document.getElementById('mr_comment_frequency_days').value, 10),
+            projects: projectIds
+        };
+
+        fetch('/api/config', {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(updates)
+        })
+        .then(response => {
+            if (response.status === 401) {
+                window.location.reload();
+                return;
+            }
+            return response.json().then(data => ({ status: response.status, data }));
+        })
+        .then(({ status, data }) => {
+            if (status === 200) {
+                showStatus('Configuration saved successfully!', 'success');
+                // Reload to get the updated config
+                loadConfig();
+            } else {
+                showStatus(data.error || 'Error saving configuration', 'error');
+            }
+        })
+        .catch(error => {
+            console.error('Error saving config:', error);
+            showStatus('Error saving configuration', 'error');
+        });
+    }
+
+    function resetForm() {
+        if (originalConfig) {
+            populateForm(originalConfig);
+            showStatus('Form reset to last saved values', 'info');
+        }
+    }
+
+    function showStatus(message, type) {
+        const statusEl = document.getElementById('save-status');
+        statusEl.textContent = message;
+        statusEl.className = 'save-status ' + type;
+        statusEl.classList.remove('hidden');
+
+        setTimeout(() => {
+            statusEl.classList.add('hidden');
+        }, 5000);
+    }
+</script>
+{% endblock %}
