@@ -68,11 +68,16 @@ smtp:
 # - Fetch branches and merge requests in parallel
 # - Speed up archiving operations
 #
-# Higher values increase speed but also memory and API load.
+# Higher values increase speed but also memory and API load, and can
+# increase the risk of hitting GitLab API rate limits because more
+# requests are made in parallel. If you see rate-limit errors from
+# GitLab (HTTP 429 or similar), reduce this value and/or stagger runs.
 # Recommended values:
 # - Small deployments (1-10 projects): 2-4
 # - Medium deployments (10-50 projects): 4-8
-# - Large deployments (50+ projects): 8-16
+# - Large deployments (50+ projects): 8-16 (use lower values if your
+#   GitLab instance has strict API rate limits or many projects are
+#   processed at the same time)
 #
 # Default: 4
 max_workers: 4
@@ -136,6 +141,12 @@ archive_folder: "./archived_branches"
 # The comments are designed to be clear and friendly (with a touch of humor)
 # to encourage action without being annoying. There are 50+ different comment
 # options that are randomly selected to keep notifications fresh.
+#
+# Note: With parallel processing (max_workers > 1), multiple threads may access
+# the SQLite database simultaneously when recording comments. SQLite has built-in
+# retry logic with a default timeout of 5 seconds. If you experience "database is
+# locked" errors with high max_workers values, consider reducing max_workers when
+# MR commenting is enabled.
 
 # Enable MR reminder comments (default: false)
 enable_mr_comments: false
