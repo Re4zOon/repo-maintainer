@@ -147,7 +147,7 @@ class TestIsUserActive(unittest.TestCase):
         result = stale_branch_mr_handler.is_user_active(mock_gl, 'user@example.com')
 
         self.assertTrue(result)
-        mock_gl.users.list.assert_called_once_with(search='user@example.com', per_page=1)
+        mock_gl.users.list.assert_called_once_with(search='user@example.com', per_page=1, iterator=True)
 
     def test_inactive_user(self):
         """Test that inactive user returns False."""

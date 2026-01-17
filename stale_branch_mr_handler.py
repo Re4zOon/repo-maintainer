@@ -1157,13 +1157,14 @@ def get_mr_last_activity_date(project, mr) -> Optional[datetime]:
     try:
         # Get the most recent note by sorting by updated_at descending
         # Note: order_by and sort parameters are well-supported in GitLab API v4+
-        notes = project.mergerequests.get(mr.iid).notes.list(
+        notes_list = list(project.mergerequests.get(mr.iid).notes.list(
             order_by='updated_at',
             sort='desc',
-            per_page=1
-        )
-        if notes:
-            note = notes[0]
+            per_page=1,
+            iterator=True
+        ))
+        if notes_list:
+            note = notes_list[0]
             note_date_str = getattr(note, 'updated_at', None)
             if not note_date_str:
                 # Fall back to created_at if updated_at is not available
@@ -1197,13 +1198,14 @@ def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
         Dictionary with MR information if found, None otherwise
     """
     try:
-        mrs = project.mergerequests.list(
+        mrs_list = list(project.mergerequests.list(
             source_branch=branch_name,
             state='opened',
-            per_page=1
-        )
-        if mrs:
-            mr = mrs[0]
+            per_page=1,
+            iterator=True
+        ))
+        if mrs_list:
+            mr = mrs_list[0]
             return _build_mr_info_dict(project, mr, branch_name)
     except gitlab.exceptions.GitlabError as e:
         logger.warning(f"Error fetching merge requests for branch {branch_name}: {e}")
@@ -1284,10 +1286,10 @@ def get_user_email_by_username(gl: gitlab.Gitlab, username: str) -> str:
         User's email address or empty string if not found
     """
     try:
-        users = gl.users.list(username=username, per_page=1)
-        if users:
+        users_list = list(gl.users.list(username=username, per_page=1, iterator=True))
+        if users_list:
             # Get the public email if available
-            user = users[0]
+            user = users_list[0]
             return getattr(user, 'email', '') or getattr(user, 'public_email', '') or ''
     except gitlab.exceptions.GitlabError as e:
         logger.warning(f"Error fetching user email for {username}: {e}")
@@ -1930,9 +1932,9 @@ def is_user_active(gl: gitlab.Gitlab, email: str) -> bool:
         True if user is active, False otherwise
     """
     try:
-        users = gl.users.list(search=email, per_page=1)
-        if users:
-            user = users[0]
+        users_list = list(gl.users.list(search=email, per_page=1, iterator=True))
+        if users_list:
+            user = users_list[0]
             return user.state == 'active'
     except gitlab.exceptions.GitlabError as e:
         logger.warning(f"Error checking user status for {email}: {e}")
