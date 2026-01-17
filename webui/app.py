@@ -81,9 +81,15 @@ def create_app(config_path=None, test_config=None):
 
 
 def check_auth(username, password):
-    """Check if a username/password combination is valid."""
-    return (username == os.environ.get('WEBUI_USERNAME', 'admin') and
-            password == os.environ.get('WEBUI_PASSWORD', 'admin'))
+    """Check if a username/password combination is valid.
+    
+    Uses constant-time comparison to prevent timing attacks.
+    """
+    stored_username = os.environ.get('WEBUI_USERNAME', 'admin')
+    stored_password = os.environ.get('WEBUI_PASSWORD', 'admin')
+    username_match = secrets.compare_digest(str(username), str(stored_username))
+    password_match = secrets.compare_digest(str(password), str(stored_password))
+    return username_match and password_match
 
 
 def authenticate():

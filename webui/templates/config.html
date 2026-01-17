@@ -157,6 +157,9 @@
                 return response.json();
             })
             .then(data => {
+                if (data == null) {
+                    return;
+                }
                 originalConfig = data;
                 populateForm(data);
             })

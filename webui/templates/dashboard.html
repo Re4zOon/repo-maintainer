@@ -143,6 +143,10 @@
                 return response.json();
             })
             .then(data => {
+                if (data == null) {
+                    // No data to process (e.g. after 401 reload path)
+                    return;
+                }
                 currentStats = data;
                 updateDashboard(data);
             })

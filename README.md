@@ -242,11 +242,11 @@ Note: Sensitive settings (API tokens, passwords) cannot be modified through the 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `WEBUI_HOST` | `0.0.0.0` | Host to bind the server |
+| `WEBUI_HOST` | Docker: `0.0.0.0` (local: `127.0.0.1`) | Host to bind the server |
 | `WEBUI_PORT` | `5000` | Port for the WebUI |
-| `WEBUI_USERNAME` | `admin` | Username for authentication |
-| `WEBUI_PASSWORD` | `admin` | Password for authentication |
-| `WEBUI_SECRET_KEY` | - | Secret key for sessions |
+| `WEBUI_USERNAME` | `admin` | Username for authentication (default for local runs; Docker deployments must set this explicitly) |
+| `WEBUI_PASSWORD` | `admin` | Password for authentication (default for local runs; Docker deployments must set this explicitly) |
+| `WEBUI_SECRET_KEY` | - | Secret key for sessions (auto-generated if not set) |
 | `CONFIG_PATH` | `config.yaml` | Path to config file |
 
 ## Docker Deployment

@@ -27,6 +27,7 @@
         if (themeToggle) {
             themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
             themeToggle.title = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+            themeToggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
         }
     }
 
