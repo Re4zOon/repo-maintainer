@@ -26,11 +26,12 @@
     </main>
 
     <footer>
-        <p>&copy; {{ current_year|default("2024") }} Repo Maintainer | 
+        <p>&copy; <span id="current-year"></span> Repo Maintainer | 
             <a href="https://github.com/Re4zOon/repo-maintainer" target="_blank">GitHub</a>
         </p>
     </footer>
 
+    <script>document.getElementById('current-year').textContent = new Date().getFullYear();</script>
     <script src="{{ url_for('static', filename='main.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
