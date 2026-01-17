@@ -15,14 +15,16 @@ the cleanup period by:
 """
 
 import argparse
+import functools
 import logging
 import os
+import random
 import smtplib
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Optional
+from typing import List, Optional
 
 import gitlab
 import yaml
@@ -58,8 +60,7 @@ EMAIL_TEMPLATE = """
     <div class="content">
         <p>Hello,</p>
 
-        <p>This is your friendly nudge from the cleanup bot 🤖. The following items in our
-        GitLab projects have been snoozing for {{ stale_days }} days and could use a check-in:</p>
+        <p>{{ greeting }}</p>
 
         {% if merge_requests %}
         <div class="branch-list">
@@ -123,8 +124,13 @@ DEFAULT_ENABLE_MR_COMMENTS = False
 DEFAULT_MR_COMMENT_INACTIVITY_DAYS = 14
 DEFAULT_MR_COMMENT_FREQUENCY_DAYS = 7
 
-# List of funny reminder comments for stale MRs
-MR_REMINDER_COMMENTS = [
+# Default paths for data files (relative to script location)
+DEFAULT_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+DEFAULT_MR_COMMENTS_FILE = os.path.join(DEFAULT_DATA_DIR, "mr_reminder_comments.txt")
+DEFAULT_EMAIL_GREETINGS_FILE = os.path.join(DEFAULT_DATA_DIR, "email_greetings.txt")
+
+# Fallback list of reminder comments for stale MRs (used if file cannot be loaded)
+FALLBACK_MR_REMINDER_COMMENTS = [
     "👋 Hey there! This MR has been gathering digital dust for a while. "
     "Just a friendly nudge to see if it still needs attention. "
     "The code misses you! 🥺",
@@ -141,15 +147,207 @@ MR_REMINDER_COMMENTS = [
 
     "⏰ Tick-tock! This MR is aging like fine wine... or maybe like milk? 🥛 "
     "Either way, it could use some love. Your future self will thank you! 🙏",
-
-    "🌱 This MR planted its roots here a while ago but hasn't grown much. "
-    "A little watering (review/update) could help it blossom! 🌸 "
-    "Or maybe it's time to pull the weeds? 🌿",
-
-    "🎵 *Plays 'Hello' by Adele* Hello from the other siiiide... "
-    "This MR has been waiting for attention. At least it called a thousand times... "
-    "Okay, maybe just this once. 📞",
 ]
+
+# Fallback list of email greetings (used if file cannot be loaded)
+FALLBACK_EMAIL_GREETINGS = [
+    (
+        "This is your friendly nudge from the cleanup bot 🤖. The following items in our "
+        "GitLab projects have been snoozing for {{ stale_days }} days and could use a check-in:"
+    ),
+    (
+        "Beep boop! 🤖 Your friendly neighborhood cleanup bot here! I've noticed some items "
+        "that have been enjoying an extended vacation ({{ stale_days }} days to be exact):"
+    ),
+    (
+        "*adjusts monocle* 🧐 Excuse me, but it appears some of your code has been gathering "
+        "dust for {{ stale_days }} days. Perhaps it's time for a spring cleaning?"
+    ),
+    (
+        "🎺 Attention! This is not a drill! (Okay, maybe it's a friendly drill.) "
+        "Some items have been idle for {{ stale_days }} days:"
+    ),
+    (
+        "👋 Hey there, code wrangler! Your branches and MRs have been grazing peacefully "
+        "for {{ stale_days }} days. Time to round them up!"
+    ),
+]
+
+# Cache for loaded messages - uses functools.lru_cache for thread-safety
+# The cache is keyed by file path to support different config files
+
+
+@functools.lru_cache(maxsize=16)
+def _load_messages_cached(file_path: str) -> tuple:
+    """
+    Load messages from file with caching.
+
+    Uses lru_cache for thread-safe caching keyed by file path.
+    Returns a tuple for immutability (required by lru_cache).
+
+    Args:
+        file_path: Path to the text file containing messages
+
+    Returns:
+        Tuple of messages loaded from the file
+
+    Raises:
+        FileNotFoundError: If the file does not exist
+        ValueError: If the file contains no valid messages
+    """
+    messages = load_messages_from_file(file_path)
+    return tuple(messages)
+
+
+def load_messages_from_file(file_path: str) -> List[str]:
+    """
+    Load messages from a text file.
+
+    Each message is separated by a blank line.
+    Lines starting with # are treated as comments and ignored.
+
+    Args:
+        file_path: Path to the text file containing messages
+
+    Returns:
+        List of messages loaded from the file
+
+    Raises:
+        FileNotFoundError: If the file does not exist
+        ValueError: If the file contains no valid messages
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Messages file not found: {file_path}")
+
+    messages = []
+    current_message_lines = []
+
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            stripped = line.strip()
+
+            # Skip comment lines
+            if stripped.startswith('#'):
+                continue
+
+            # Empty line marks end of current message
+            if not stripped:
+                if current_message_lines:
+                    messages.append(' '.join(current_message_lines))
+                    current_message_lines = []
+            else:
+                current_message_lines.append(stripped)
+
+        # Don't forget the last message if file doesn't end with blank line
+        if current_message_lines:
+            messages.append(' '.join(current_message_lines))
+
+    if not messages:
+        raise ValueError(f"No valid messages found in file: {file_path}")
+
+    return messages
+
+
+def _get_config_file_path(config: Optional[dict], config_key: str, default_path: str) -> str:
+    """
+    Get file path from config or use default.
+
+    Args:
+        config: Optional configuration dictionary
+        config_key: Key to look up in config
+        default_path: Default path to use if not in config
+
+    Returns:
+        File path from config or default
+    """
+    if config and config.get(config_key):
+        return config[config_key]
+    return default_path
+
+
+def get_mr_reminder_comments(config: Optional[dict] = None) -> List[str]:
+    """
+    Get the list of MR reminder comments.
+
+    Loads from file with thread-safe caching keyed by file path.
+    Falls back to hardcoded list if file cannot be loaded.
+
+    Args:
+        config: Optional configuration dictionary with 'mr_comments_file' path
+
+    Returns:
+        List of MR reminder comments
+    """
+    file_path = _get_config_file_path(config, 'mr_comments_file', DEFAULT_MR_COMMENTS_FILE)
+
+    try:
+        comments = _load_messages_cached(file_path)
+        logger.debug(f"Using {len(comments)} MR reminder comments from {file_path}")
+        return list(comments)
+    except (FileNotFoundError, ValueError) as e:
+        logger.warning(f"Could not load MR comments from file: {e}. Using fallback comments.")
+        return list(FALLBACK_MR_REMINDER_COMMENTS)
+
+
+def get_email_greetings(config: Optional[dict] = None) -> List[str]:
+    """
+    Get the list of email greetings.
+
+    Loads from file with thread-safe caching keyed by file path.
+    Falls back to hardcoded list if file cannot be loaded.
+
+    Args:
+        config: Optional configuration dictionary with 'email_greetings_file' path
+
+    Returns:
+        List of email greetings
+    """
+    file_path = _get_config_file_path(config, 'email_greetings_file', DEFAULT_EMAIL_GREETINGS_FILE)
+
+    try:
+        greetings = _load_messages_cached(file_path)
+        logger.debug(f"Using {len(greetings)} email greetings from {file_path}")
+        return list(greetings)
+    except (FileNotFoundError, ValueError) as e:
+        logger.warning(f"Could not load email greetings from file: {e}. Using fallback greetings.")
+        return list(FALLBACK_EMAIL_GREETINGS)
+
+
+def get_random_mr_comment(config: Optional[dict] = None) -> str:
+    """
+    Get a random MR reminder comment.
+
+    Args:
+        config: Optional configuration dictionary
+
+    Returns:
+        A randomly selected MR reminder comment
+    """
+    comments = get_mr_reminder_comments(config)
+    return random.choice(comments)
+
+
+def get_random_email_greeting(stale_days: int, config: Optional[dict] = None) -> str:
+    """
+    Get a random email greeting with the stale_days variable rendered.
+
+    Args:
+        stale_days: Number of days for stale threshold (used in template rendering)
+        config: Optional configuration dictionary
+
+    Returns:
+        A randomly selected email greeting with stale_days rendered
+    """
+    greetings = get_email_greetings(config)
+    greeting_template = random.choice(greetings)
+    # Render the template with stale_days
+    template = Template(greeting_template)
+    return template.render(stale_days=stale_days)
+
+
+# For backwards compatibility, keep MR_REMINDER_COMMENTS as an alias
+# This constant now serves only as a static fallback and is not dynamically populated
+MR_REMINDER_COMMENTS = FALLBACK_MR_REMINDER_COMMENTS
 
 
 class ConfigurationError(Exception):
@@ -551,7 +749,8 @@ def should_post_mr_comment(
 def get_next_comment_index(
     db_path: str,
     project_id: int,
-    mr_iid: int
+    mr_iid: int,
+    config: Optional[dict] = None
 ) -> int:
     """
     Get the next comment index to use for an MR.
@@ -562,18 +761,21 @@ def get_next_comment_index(
         db_path: Path to the SQLite database file
         project_id: GitLab project ID
         mr_iid: Merge request internal ID
+        config: Optional configuration dictionary
 
     Returns:
         Index of the next comment to use
     """
     comment_info = get_last_mr_comment_info(db_path, project_id, mr_iid)
+    comments = get_mr_reminder_comments(config)
 
     if comment_info is None:
-        return 0
+        # For new MRs, use a random index to ensure variety
+        return random.randint(0, len(comments) - 1)
 
     _, last_index = comment_info
-    # Cycle to the next comment
-    return (last_index + 1) % len(MR_REMINDER_COMMENTS)
+    # Cycle to the next comment (wrap around if needed)
+    return (last_index + 1) % len(comments)
 
 
 def post_mr_reminder_comment(
@@ -641,6 +843,9 @@ def process_stale_mr_comments(
     db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
     project_ids = config.get('projects', [])
 
+    # Load comments from file (will be cached after first call)
+    comments = get_mr_reminder_comments(config)
+
     summary = {
         'comments_posted': 0,
         'comments_skipped': 0,
@@ -669,8 +874,8 @@ def process_stale_mr_comments(
                     continue
 
                 # Get the next comment to use
-                comment_index = get_next_comment_index(db_path, project_id, mr_iid)
-                comment_text = MR_REMINDER_COMMENTS[comment_index]
+                comment_index = get_next_comment_index(db_path, project_id, mr_iid, config)
+                comment_text = comments[comment_index]
 
                 # Post the comment
                 if post_mr_reminder_comment(gl, project_id, mr_iid, comment_text, dry_run=dry_run):
@@ -1819,7 +2024,8 @@ def generate_email_content(
     branches: list,
     stale_days: int,
     cleanup_weeks: int,
-    merge_requests: Optional[list] = None
+    merge_requests: Optional[list] = None,
+    config: Optional[dict] = None
 ) -> str:
     """
     Generate HTML email content from the template.
@@ -1829,16 +2035,21 @@ def generate_email_content(
         stale_days: Number of days for stale threshold
         cleanup_weeks: Number of weeks until automatic cleanup
         merge_requests: Optional list of stale merge request information
+        config: Optional configuration dictionary
 
     Returns:
         Rendered HTML email content
     """
+    # Get a random greeting and render it with stale_days
+    greeting = get_random_email_greeting(stale_days, config)
+
     template = Template(EMAIL_TEMPLATE)
     return template.render(
         branches=branches,
         merge_requests=merge_requests or [],
         stale_days=stale_days,
-        cleanup_weeks=cleanup_weeks
+        cleanup_weeks=cleanup_weeks,
+        greeting=greeting
     )
 
 
@@ -1945,7 +2156,7 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
 
         total_items = len(branches) + len(merge_requests)
         html_content = generate_email_content(
-            branches, stale_days, cleanup_weeks, merge_requests
+            branches, stale_days, cleanup_weeks, merge_requests, config
         )
 
         # Create descriptive subject

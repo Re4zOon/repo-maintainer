@@ -297,9 +297,11 @@ class TestGenerateEmailContent(unittest.TestCase):
         self.assertIn('Test Project', result)
         self.assertIn('feature-branch', result)
         self.assertIn('Test User', result)
-        self.assertIn('30 days', result)
+        # Check for 30 days in the greeting (template variable is rendered)
+        self.assertIn('30', result)
         self.assertIn('4 weeks', result)
-        self.assertIn('cleanup bot', result)
+        # The greeting is now randomly selected, so we check for the HTML structure instead
+        self.assertIn('<p>Hello,</p>', result)
 
     def test_generates_html_with_multiple_branches(self):
         """Test email content with multiple branches."""
@@ -2238,12 +2240,15 @@ class TestGetNextCommentIndex(unittest.TestCase):
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
-    def test_returns_zero_for_new_mr(self):
-        """Test that index 0 is returned for MR with no comment history."""
+    def test_returns_valid_index_for_new_mr(self):
+        """Test that a valid index is returned for MR with no comment history."""
         result = stale_branch_mr_handler.get_next_comment_index(
             self.db_path, 123, 42
         )
-        self.assertEqual(result, 0)
+        # Now returns a random index, so just verify it's valid
+        comments = stale_branch_mr_handler.get_mr_reminder_comments()
+        self.assertGreaterEqual(result, 0)
+        self.assertLess(result, len(comments))
 
     def test_returns_next_index_in_sequence(self):
         """Test that the next index in sequence is returned."""
@@ -2259,8 +2264,9 @@ class TestGetNextCommentIndex(unittest.TestCase):
 
     def test_wraps_around_to_zero(self):
         """Test that index wraps around when reaching the end of comments list."""
-        # Record that we used the last comment index
-        last_index = len(stale_branch_mr_handler.MR_REMINDER_COMMENTS) - 1
+        # Get the actual number of comments from the loaded list
+        comments = stale_branch_mr_handler.get_mr_reminder_comments()
+        last_index = len(comments) - 1
         stale_branch_mr_handler.record_mr_comment(
             self.db_path, 123, 42, last_index
         )
@@ -2466,17 +2472,107 @@ class TestMrReminderComments(unittest.TestCase):
 
     def test_comments_list_is_not_empty(self):
         """Test that the comments list is not empty."""
-        self.assertTrue(len(stale_branch_mr_handler.MR_REMINDER_COMMENTS) > 0)
+        comments = stale_branch_mr_handler.get_mr_reminder_comments()
+        self.assertGreater(len(comments), 0)
 
     def test_all_comments_are_strings(self):
         """Test that all comments are strings."""
-        for comment in stale_branch_mr_handler.MR_REMINDER_COMMENTS:
+        comments = stale_branch_mr_handler.get_mr_reminder_comments()
+        for comment in comments:
             self.assertIsInstance(comment, str)
 
     def test_all_comments_are_not_empty(self):
         """Test that all comments are non-empty strings."""
-        for comment in stale_branch_mr_handler.MR_REMINDER_COMMENTS:
-            self.assertTrue(len(comment) > 0)
+        comments = stale_branch_mr_handler.get_mr_reminder_comments()
+        for comment in comments:
+            self.assertGreater(len(comment), 0)
+
+    def test_has_at_least_20_comments(self):
+        """Test that there are at least 20 MR reminder comments."""
+        comments = stale_branch_mr_handler.get_mr_reminder_comments()
+        self.assertGreaterEqual(len(comments), 20)
+
+
+class TestLoadMessagesFromFile(unittest.TestCase):
+    """Tests for load_messages_from_file function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_loads_messages_from_file(self):
+        """Test that messages are loaded from a file."""
+        file_path = os.path.join(self.temp_dir, 'test_messages.txt')
+        with open(file_path, 'w') as f:
+            f.write("# Comment line to ignore\n")
+            f.write("First message line 1\n")
+            f.write("First message line 2\n")
+            f.write("\n")
+            f.write("Second message\n")
+            f.write("\n")
+            f.write("Third message\n")
+
+        messages = stale_branch_mr_handler.load_messages_from_file(file_path)
+
+        self.assertEqual(len(messages), 3)
+        self.assertEqual("First message line 1 First message line 2", messages[0])
+        self.assertEqual("Second message", messages[1])
+        self.assertEqual("Third message", messages[2])
+
+    def test_raises_error_for_nonexistent_file(self):
+        """Test that FileNotFoundError is raised for nonexistent file."""
+        with self.assertRaises(FileNotFoundError):
+            stale_branch_mr_handler.load_messages_from_file('/nonexistent/path.txt')
+
+    def test_raises_error_for_empty_file(self):
+        """Test that ValueError is raised for file with no valid messages."""
+        file_path = os.path.join(self.temp_dir, 'empty_messages.txt')
+        with open(file_path, 'w') as f:
+            f.write("# Only comments\n")
+            f.write("# No actual messages\n")
+
+        with self.assertRaises(ValueError):
+            stale_branch_mr_handler.load_messages_from_file(file_path)
+
+
+class TestGetEmailGreetings(unittest.TestCase):
+    """Tests for email greetings functionality."""
+
+    def test_greetings_list_is_not_empty(self):
+        """Test that the greetings list is not empty."""
+        greetings = stale_branch_mr_handler.get_email_greetings()
+        self.assertGreater(len(greetings), 0)
+
+    def test_has_at_least_20_greetings(self):
+        """Test that there are at least 20 email greetings."""
+        greetings = stale_branch_mr_handler.get_email_greetings()
+        self.assertGreaterEqual(len(greetings), 20)
+
+    def test_random_greeting_renders_stale_days(self):
+        """Test that random greeting renders the stale_days variable."""
+        greeting = stale_branch_mr_handler.get_random_email_greeting(42)
+        # The template placeholder should be absent after rendering
+        self.assertNotIn('{{ stale_days }}', greeting)
+        self.assertNotIn('{{stale_days}}', greeting)
+
+
+class TestGetRandomMrComment(unittest.TestCase):
+    """Tests for get_random_mr_comment function."""
+
+    def test_returns_string(self):
+        """Test that a string is returned."""
+        comment = stale_branch_mr_handler.get_random_mr_comment()
+        self.assertIsInstance(comment, str)
+
+    def test_returns_non_empty_string(self):
+        """Test that a non-empty string is returned."""
+        comment = stale_branch_mr_handler.get_random_mr_comment()
+        self.assertGreater(len(comment), 0)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,105 @@
+# Email Greeting Messages
+# Each message is separated by a blank line
+# Lines starting with # are ignored
+# These greetings are used in stale branch/MR notification emails
+
+This is your friendly nudge from the cleanup bot 🤖. The following items in our GitLab projects have been snoozing for {{ stale_days }} days and could use a check-in:
+
+Beep boop! 🤖 Your friendly neighborhood cleanup bot here! I've noticed some items that have been enjoying an extended vacation ({{ stale_days }} days to be exact):
+
+*adjusts monocle* 🧐 Excuse me, but it appears some of your code has been gathering dust for {{ stale_days }} days. Perhaps it's time for a spring cleaning?
+
+🎺 Attention! This is not a drill! (Okay, maybe it's a friendly drill.) Some items have been idle for {{ stale_days }} days:
+
+👋 Hey there, code wrangler! Your branches and MRs have been grazing peacefully for {{ stale_days }} days. Time to round them up!
+
+🌟 Plot twist: Your code still exists and misses you! After {{ stale_days }} days of waiting, these items are wondering if you've forgotten about them:
+
+🎵 *hums elevator music* While you were away, these items have been waiting for {{ stale_days }} days. No pressure, but they're starting to feel neglected:
+
+☕ Grab your coffee and let's talk! Some items have been marinating for {{ stale_days }} days. Time to check if they're done cooking:
+
+🎪 Step right up to the greatest show in code review! These items have been performing their waiting act for {{ stale_days }} days:
+
+🌈 Good news: your code is patient! After {{ stale_days }} days, these items are still here and eager for attention:
+
+🚀 Mission control to developer! We've detected some items that have been in orbit for {{ stale_days }} days. Ready for landing?
+
+🎭 *dramatic voice* In a repository not so far away, some items have been waiting {{ stale_days }} days for a hero to review them:
+
+🎮 Achievement unlocked: Items have survived {{ stale_days }} days without attention! But now it's time to complete this quest:
+
+🌻 Your code garden needs some tending! These items have been growing wild for {{ stale_days }} days:
+
+🎬 Director's note: These items have been in post-production for {{ stale_days }} days. Ready for the final cut?
+
+🧙 A wizard is never late, nor is he early... but this code has been waiting {{ stale_days }} days. Even wizards would agree it's time for review:
+
+🎯 Target acquired: Items that have been idle for {{ stale_days }} days. Lock and load those reviews!
+
+🌊 Surf's up! 🏄 These items have been riding the wave of inactivity for {{ stale_days }} days. Time to catch the merge wave:
+
+🎸 Rock and roll! These items have been waiting backstage for {{ stale_days }} days. Ready for their encore?
+
+🍿 *munches popcorn* This is getting interesting! After {{ stale_days }} days, let's see what happens next with these items:
+
+🎁 Surprise! You have items that have been wrapped and waiting for {{ stale_days }} days. Time to open them up:
+
+🌙 While you were dreaming, these items have been having a {{ stale_days }}-day sleep of their own:
+
+🎪 The circus is in town! These items have been performing their balancing act for {{ stale_days }} days:
+
+🧁 Sweet reminder! These items have been sitting on the shelf for {{ stale_days }} days. Still fresh, but getting stale:
+
+🎲 Roll the dice! After {{ stale_days }} days, it's time to decide the fate of these items:
+
+🌴 Wish you were here! These items have been on vacation for {{ stale_days }} days. Time to bring them home:
+
+🎨 Brush off your creativity! These items have been waiting {{ stale_days }} days for your artistic touch:
+
+🎤 *taps microphone* Is this thing on? Testing, testing... Your items have been waiting {{ stale_days }} days for feedback:
+
+🦸 Not all heroes wear capes, but they do review stale items! After {{ stale_days }} days, these need a hero:
+
+🎵 *plays 'In the Air Tonight' drum solo* This moment has been {{ stale_days }} days in the making. Let's make it count:
+
+🧪 Science fact: Items left unattended for {{ stale_days }} days may develop a case of the stales. Cure available: code review:
+
+🎯 Heads up! Your code radar has detected items idle for {{ stale_days }} days. Approaching merge zone:
+
+🌪️ Breaking news: Items have been experiencing a {{ stale_days }}-day calm. Time to stir up some activity:
+
+🎭 In today's episode of "Where Are They Now?": Items that have been waiting {{ stale_days }} days for their close-up:
+
+🦋 Metamorphosis pending! These items have been in their cocoon for {{ stale_days }} days. Ready to transform:
+
+🎡 Round and round we go! After {{ stale_days }} days, these items are getting dizzy waiting:
+
+🧲 Magnetic attraction required! These items have been floating around for {{ stale_days }} days. Time to pull them in:
+
+🎺 *plays reveille* Rise and shine! Your items have been sleeping for {{ stale_days }} days. Morning call!
+
+🌟 Stardate {{ stale_days }}: Captain's log shows items requiring immediate attention:
+
+🎪 Welcome to the code circus! These acrobats have been waiting {{ stale_days }} days for their big performance:
+
+🎯 Bullseye! You've been targeted for a friendly reminder. Items idle for {{ stale_days }} days:
+
+🌈 Over the rainbow of {{ stale_days }} days, these items have been waiting for their pot of gold (a merge):
+
+🎬 Take {{ stale_days }}! Action! These items are ready for their scene:
+
+🧸 Lost and found: Items that have been wandering alone for {{ stale_days }} days:
+
+🎮 Level up opportunity! Clear these {{ stale_days }}-day-old items to advance:
+
+🌻 Sun's out, reviews out! ☀️ These items have been soaking up rays for {{ stale_days }} days:
+
+🎭 Intermission over! After {{ stale_days }} days, it's time for act two:
+
+🎵 And the beat goes on... for {{ stale_days }} days now. Time to change the tune:
+
+🧙‍♂️ Expecto Reviewum! These magical items have been waiting {{ stale_days }} days for your spell:
+
+🎯 GPS alert: You've reached your destination of {{ stale_days }} days of inactivity. Recalculating route to merge:
+
