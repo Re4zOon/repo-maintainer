@@ -354,6 +354,43 @@ def get_random_email_greeting(stale_days: int, config: Optional[dict] = None) ->
 MR_REMINDER_COMMENTS = FALLBACK_MR_REMINDER_COMMENTS
 
 
+def get_validated_max_workers(config: dict) -> int:
+    """
+    Get and validate the max_workers configuration value.
+
+    Ensures max_workers is a positive integer within a reasonable range (1-32).
+    Invalid values are logged and replaced with the default.
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        Validated max_workers value (1-32)
+    """
+    raw_max_workers = config.get('max_workers', DEFAULT_MAX_WORKERS)
+    
+    # Try to convert to int
+    try:
+        max_workers = int(raw_max_workers)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"Invalid 'max_workers' value {raw_max_workers!r} in config; "
+            f"falling back to default {DEFAULT_MAX_WORKERS}"
+        )
+        return DEFAULT_MAX_WORKERS
+    
+    # Clamp to a reasonable, safe range (1-32)
+    if max_workers < 1 or max_workers > 32:
+        clamped = min(max(max_workers, 1), 32)
+        logger.warning(
+            f"Configured 'max_workers' ({max_workers}) is out of allowed range 1-32; "
+            f"using {clamped} instead"
+        )
+        return clamped
+    
+    return max_workers
+
+
 class ConfigurationError(Exception):
     """Raised when configuration is invalid or missing required fields."""
 
@@ -926,7 +963,7 @@ def process_stale_mr_comments(
     frequency_days = config.get('mr_comment_frequency_days', DEFAULT_MR_COMMENT_FREQUENCY_DAYS)
     db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
     project_ids = config.get('projects', [])
-    max_workers = config.get('max_workers', DEFAULT_MAX_WORKERS)
+    max_workers = get_validated_max_workers(config)
 
     # Load comments from file (will be cached after first call)
     comments = get_mr_reminder_comments(config)
@@ -1157,14 +1194,14 @@ def get_mr_last_activity_date(project, mr) -> Optional[datetime]:
     try:
         # Get the most recent note by sorting by updated_at descending
         # Note: order_by and sort parameters are well-supported in GitLab API v4+
-        notes_list = list(project.mergerequests.get(mr.iid).notes.list(
+        notes_iter = project.mergerequests.get(mr.iid).notes.list(
             order_by='updated_at',
             sort='desc',
             per_page=1,
             iterator=True
-        ))
-        if notes_list:
-            note = notes_list[0]
+        )
+        note = next(iter(notes_iter), None)
+        if note is not None:
             note_date_str = getattr(note, 'updated_at', None)
             if not note_date_str:
                 # Fall back to created_at if updated_at is not available
@@ -1198,14 +1235,14 @@ def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
         Dictionary with MR information if found, None otherwise
     """
     try:
-        mrs_list = list(project.mergerequests.list(
+        mrs_iter = project.mergerequests.list(
             source_branch=branch_name,
             state='opened',
             per_page=1,
             iterator=True
-        ))
-        if mrs_list:
-            mr = mrs_list[0]
+        )
+        mr = next(iter(mrs_iter), None)
+        if mr is not None:
             return _build_mr_info_dict(project, mr, branch_name)
     except gitlab.exceptions.GitlabError as e:
         logger.warning(f"Error fetching merge requests for branch {branch_name}: {e}")
@@ -1286,10 +1323,10 @@ def get_user_email_by_username(gl: gitlab.Gitlab, username: str) -> str:
         User's email address or empty string if not found
     """
     try:
-        users_list = list(gl.users.list(username=username, per_page=1, iterator=True))
-        if users_list:
+        users_iter = gl.users.list(username=username, per_page=1, iterator=True)
+        user = next(iter(users_iter), None)
+        if user is not None:
             # Get the public email if available
-            user = users_list[0]
             return getattr(user, 'email', '') or getattr(user, 'public_email', '') or ''
     except gitlab.exceptions.GitlabError as e:
         logger.warning(f"Error fetching user email for {username}: {e}")
@@ -1782,7 +1819,7 @@ def get_branches_ready_for_archiving(
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
     project_ids = config.get('projects', [])
-    max_workers = config.get('max_workers', DEFAULT_MAX_WORKERS)
+    max_workers = get_validated_max_workers(config)
 
     all_branches_to_archive = []
     all_mrs_to_archive = []
@@ -1932,9 +1969,9 @@ def is_user_active(gl: gitlab.Gitlab, email: str) -> bool:
         True if user is active, False otherwise
     """
     try:
-        users_list = list(gl.users.list(search=email, per_page=1, iterator=True))
-        if users_list:
-            user = users_list[0]
+        users_iter = gl.users.list(search=email, per_page=1, iterator=True)
+        user = next(iter(users_iter), None)
+        if user is not None:
             return user.state == 'active'
     except gitlab.exceptions.GitlabError as e:
         logger.warning(f"Error checking user status for {email}: {e}")
@@ -2127,7 +2164,7 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     stale_days = config.get('stale_days', 30)
     fallback_email = config.get('fallback_email', '')
     project_ids = config.get('projects', [])
-    max_workers = config.get('max_workers', DEFAULT_MAX_WORKERS)
+    max_workers = get_validated_max_workers(config)
 
     email_to_items = {}
     all_skipped_items = []
