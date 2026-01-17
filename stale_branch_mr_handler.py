@@ -1789,7 +1789,10 @@ def get_branches_ready_for_archiving(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all project processing tasks
         future_to_project = {
-            executor.submit(_process_project_for_archiving, gl, project_id, stale_days, cleanup_weeks): project_id
+            executor.submit(
+                _process_project_for_archiving,
+                gl, project_id, stale_days, cleanup_weeks
+            ): project_id
             for project_id in project_ids
         }
 
@@ -2131,7 +2134,10 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all project processing tasks
         future_to_project = {
-            executor.submit(_process_project_stale_items, gl, project_id, stale_days, fallback_email): project_id
+            executor.submit(
+                _process_project_stale_items,
+                gl, project_id, stale_days, fallback_email
+            ): project_id
             for project_id in project_ids
         }
 
