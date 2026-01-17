@@ -2485,7 +2485,7 @@ class TestMrReminderComments(unittest.TestCase):
         """Test that all comments are non-empty strings."""
         comments = stale_branch_mr_handler.get_mr_reminder_comments()
         for comment in comments:
-            self.assertTrue(len(comment) > 0)
+            self.assertGreater(len(comment), 0)
 
     def test_has_at_least_20_comments(self):
         """Test that there are at least 20 MR reminder comments."""
