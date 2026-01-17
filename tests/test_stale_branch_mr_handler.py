@@ -2638,7 +2638,7 @@ class TestParallelProcessing(unittest.TestCase):
         self.assertEqual(max_workers, 8)
 
     def test_max_workers_invalid_type_falls_back_to_default(self):
-        """Test that invalid type for max_workers falls back to default."""
+        """Test that invalid type for max_workers falls back to default and logs warning."""
         config = {
             'stale_days': 30,
             'fallback_email': 'test@example.com',
@@ -2646,11 +2646,17 @@ class TestParallelProcessing(unittest.TestCase):
             'max_workers': 'invalid'
         }
         
-        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
-        self.assertEqual(max_workers, 4)
+        with patch('stale_branch_mr_handler.logger') as mock_logger:
+            max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+            self.assertEqual(max_workers, 4)
+            # Verify warning was logged
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            self.assertIn('invalid', call_args.lower())
+            self.assertIn('max_workers', call_args)
 
     def test_max_workers_negative_value_clamped_to_1(self):
-        """Test that negative max_workers value is clamped to 1."""
+        """Test that negative max_workers value is clamped to 1 and logs warning."""
         config = {
             'stale_days': 30,
             'fallback_email': 'test@example.com',
@@ -2658,11 +2664,17 @@ class TestParallelProcessing(unittest.TestCase):
             'max_workers': -5
         }
         
-        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
-        self.assertEqual(max_workers, 1)
+        with patch('stale_branch_mr_handler.logger') as mock_logger:
+            max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+            self.assertEqual(max_workers, 1)
+            # Verify warning was logged
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            self.assertIn('-5', call_args)
+            self.assertIn('1-32', call_args)
 
     def test_max_workers_zero_value_clamped_to_1(self):
-        """Test that zero max_workers value is clamped to 1."""
+        """Test that zero max_workers value is clamped to 1 and logs warning."""
         config = {
             'stale_days': 30,
             'fallback_email': 'test@example.com',
@@ -2670,11 +2682,17 @@ class TestParallelProcessing(unittest.TestCase):
             'max_workers': 0
         }
         
-        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
-        self.assertEqual(max_workers, 1)
+        with patch('stale_branch_mr_handler.logger') as mock_logger:
+            max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+            self.assertEqual(max_workers, 1)
+            # Verify warning was logged
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            self.assertIn('0', call_args)
+            self.assertIn('1-32', call_args)
 
     def test_max_workers_too_large_value_clamped_to_32(self):
-        """Test that too large max_workers value is clamped to 32."""
+        """Test that too large max_workers value is clamped to 32 and logs warning."""
         config = {
             'stale_days': 30,
             'fallback_email': 'test@example.com',
@@ -2682,8 +2700,14 @@ class TestParallelProcessing(unittest.TestCase):
             'max_workers': 100
         }
         
-        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
-        self.assertEqual(max_workers, 32)
+        with patch('stale_branch_mr_handler.logger') as mock_logger:
+            max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+            self.assertEqual(max_workers, 32)
+            # Verify warning was logged
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            self.assertIn('100', call_args)
+            self.assertIn('1-32', call_args)
 
     def test_max_workers_float_converted_to_int(self):
         """Test that float max_workers value is converted to int."""
