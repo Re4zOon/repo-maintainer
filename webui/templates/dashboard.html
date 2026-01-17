@@ -148,7 +148,12 @@
             })
             .catch(error => {
                 console.error('Error loading stats:', error);
-                document.getElementById('total-notifications').textContent = 'Error';
+                ['total-notifications', 'branch-notifications', 'mr-notifications', 'mr-comments'].forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) {
+                        el.textContent = 'Error';
+                    }
+                });
             });
     }
 
@@ -231,7 +236,8 @@
         }
     }
 
-    // Auto-refresh every 60 seconds
-    setInterval(loadStats, 60000);
+    // Auto-refresh (default every 30 seconds, configurable via window.DASHBOARD_AUTO_REFRESH_INTERVAL)
+    const AUTO_REFRESH_INTERVAL = window.DASHBOARD_AUTO_REFRESH_INTERVAL || 30000;
+    setInterval(loadStats, AUTO_REFRESH_INTERVAL);
 </script>
 {% endblock %}

@@ -10,7 +10,10 @@ This module provides a web interface for:
 
 import logging
 import os
+import re
+import secrets
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -25,6 +28,9 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Application version
+VERSION = '1.0.0'
 
 
 def create_app(config_path=None, test_config=None):
@@ -45,7 +51,8 @@ def create_app(config_path=None, test_config=None):
     )
 
     # Default configuration
-    app.config['SECRET_KEY'] = os.environ.get('WEBUI_SECRET_KEY', 'change-me-in-production')
+    # Generate a random secret key if not provided for better security
+    app.config['SECRET_KEY'] = os.environ.get('WEBUI_SECRET_KEY') or secrets.token_hex(32)
     app.config['WEBUI_USERNAME'] = os.environ.get('WEBUI_USERNAME', 'admin')
     app.config['WEBUI_PASSWORD'] = os.environ.get('WEBUI_PASSWORD', 'admin')
 
@@ -119,7 +126,7 @@ def register_routes(app):
         return jsonify({
             'status': 'healthy',
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'version': '1.0.0'
+            'version': VERSION
         })
 
     @app.route('/api/stats')
@@ -287,10 +294,15 @@ def register_routes(app):
     def update_config():
         """Update non-sensitive configuration values."""
         config_path = app.config.get('CONFIG_PATH', 'config.yaml')
-        current_config = app.config.get('MAIN_CONFIG', {})
+        current_config = app.config.get('MAIN_CONFIG', {}).copy()
 
         if not request.is_json:
-            return jsonify({'error': 'Content-Type must be application/json'}), 400
+            received_content_type = request.headers.get('Content-Type')
+            return jsonify({
+                'error': "Invalid Content-Type header. Expected 'application/json'.",
+                'received_content_type': received_content_type,
+                'hint': "Set the HTTP header 'Content-Type: application/json' and send a valid JSON body."
+            }), 400
 
         updates = request.get_json()
 
@@ -308,13 +320,16 @@ def register_routes(app):
             'projects'
         ]
 
+        # Email validation regex
+        email_regex = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+
         # Validate and apply updates
         changes = {}
         for field in allowed_fields:
             if field in updates:
                 new_value = updates[field]
 
-                # Type validation
+                # Type validation for integer fields
                 if field in ['stale_days', 'cleanup_weeks', 'notification_frequency_days',
                              'mr_comment_inactivity_days', 'mr_comment_frequency_days']:
                     if not isinstance(new_value, int) or new_value < 1:
@@ -322,12 +337,38 @@ def register_routes(app):
                             'error': f'{field} must be a positive integer'
                         }), 400
 
+                # Boolean validation
                 if field in ['enable_auto_archive', 'enable_mr_comments']:
                     if not isinstance(new_value, bool):
                         return jsonify({
                             'error': f'{field} must be a boolean'
                         }), 400
 
+                # Email validation
+                if field == 'fallback_email':
+                    if not isinstance(new_value, str):
+                        return jsonify({
+                            'error': 'fallback_email must be a string'
+                        }), 400
+                    # Allow empty string (to clear the field), but validate non-empty values
+                    if new_value and not email_regex.match(new_value):
+                        return jsonify({
+                            'error': 'fallback_email must be a valid email address'
+                        }), 400
+
+                # Archive folder validation (prevent path traversal)
+                if field == 'archive_folder':
+                    if not isinstance(new_value, str):
+                        return jsonify({
+                            'error': 'archive_folder must be a string'
+                        }), 400
+                    # Reject paths with .. or absolute paths outside app directory
+                    if '..' in new_value:
+                        return jsonify({
+                            'error': 'archive_folder cannot contain path traversal characters (..)'
+                        }), 400
+
+                # Projects validation
                 if field == 'projects':
                     if not isinstance(new_value, list):
                         return jsonify({
@@ -346,10 +387,21 @@ def register_routes(app):
         if not changes:
             return jsonify({'message': 'No changes to apply', 'changes': {}}), 200
 
-        # Save to file
+        # Save to file using atomic write (write to temp file, then rename)
         try:
-            with open(config_path, 'w', encoding='utf-8') as f:
-                yaml.safe_dump(current_config, f, default_flow_style=False)
+            config_dir = os.path.dirname(config_path) or '.'
+            with tempfile.NamedTemporaryFile(
+                mode='w',
+                encoding='utf-8',
+                dir=config_dir,
+                suffix='.yaml',
+                delete=False
+            ) as temp_file:
+                yaml.safe_dump(current_config, temp_file, default_flow_style=False)
+                temp_path = temp_file.name
+
+            # Atomic rename (on POSIX systems, rename is atomic)
+            os.replace(temp_path, config_path)
 
             app.config['MAIN_CONFIG'] = current_config
 
@@ -360,6 +412,9 @@ def register_routes(app):
 
         except IOError as e:
             logger.error(f"Error saving configuration: {e}")
+            # Clean up temp file if it exists
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                os.unlink(temp_path)
             return jsonify({
                 'error': f'Failed to save configuration: {str(e)}'
             }), 500
@@ -396,8 +451,13 @@ def main():
     )
     parser.add_argument(
         '-H', '--host',
-        default=os.environ.get('WEBUI_HOST', '0.0.0.0'),
-        help='Host to bind the server to (default: 0.0.0.0)'
+        default=os.environ.get('WEBUI_HOST', '127.0.0.1'),
+        help=(
+            'Host to bind the server to (default: 127.0.0.1). '
+            'Use 0.0.0.0 only when explicitly required, for example in '
+            'containerized deployments, as it exposes the server on all '
+            'network interfaces.'
+        )
     )
     parser.add_argument(
         '--debug',

@@ -13,21 +13,29 @@ services:
   repo-maintainer-webui:
     build: .
     container_name: repo-maintainer-webui
-    command: ["python", "-m", "webui.app", "-c", "/app/config.yaml"]
+    command: ["python", "-m", "webui.app", "-c", "/app/config.yaml", "-H", "0.0.0.0"]
     ports:
       - "5000:5000"
     volumes:
-      # Mount config file (read-write for config updates)
+      # Mount config file (read-write for config updates).
+      # NOTE: This file is shared with the main repo-maintainer service, which
+      # reads it from /app/config.yaml. When both containers are running, the
+      # WebUI may modify config.yaml while the main service is reading it.
+      # Operators should avoid making configuration changes while critical
+      # operations are in progress, and should restart the main service after
+      # applying config updates if necessary.
       - ./config.yaml:/app/config.yaml
-      # Mount data directory for database access
+      # Mount data directory for database access.
+      # NOTE: This directory is shared with the main repo-maintainer service.
+      # Concurrent access is expected and relies on the application/database
+      # to provide appropriate locking or transactional guarantees.
       - ./data:/app/data
     environment:
-      - WEBUI_HOST=0.0.0.0
       - WEBUI_PORT=5000
       - CONFIG_PATH=/app/config.yaml
-      # Set these for authentication (change in production!)
-      - WEBUI_USERNAME=admin
-      - WEBUI_PASSWORD=admin
-      # Optional: Set a secure secret key
+      # Authentication credentials must be provided via environment or .env (required, no insecure defaults)
+      - WEBUI_USERNAME=${WEBUI_USERNAME:?WEBUI_USERNAME not set}
+      - WEBUI_PASSWORD=${WEBUI_PASSWORD:?WEBUI_PASSWORD not set}
+      # Optional: Set a secure secret key (auto-generated if not set)
       # - WEBUI_SECRET_KEY=your-secure-secret-key
     restart: unless-stopped

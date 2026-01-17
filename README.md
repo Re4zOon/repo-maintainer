@@ -172,6 +172,10 @@ The tool includes a web-based interface for monitoring statistics and managing c
 The WebUI runs as a separate service in Docker Compose:
 
 ```bash
+# Create a .env file with your credentials (required)
+echo "WEBUI_USERNAME=your-username" > .env
+echo "WEBUI_PASSWORD=your-secure-password" >> .env
+
 # Start both the CLI tool and WebUI
 docker compose up --build
 
@@ -181,18 +185,15 @@ docker compose up repo-maintainer-webui --build
 
 Access the WebUI at: `http://localhost:5000`
 
-Default credentials:
-- Username: `admin`
-- Password: `admin`
+**Important:** The WebUI requires authentication credentials to be set via environment variables. Create a `.env` file or export the variables:
 
-**Important:** Change the default credentials in production by setting environment variables:
+```bash
+# Required environment variables
+export WEBUI_USERNAME=your-username
+export WEBUI_PASSWORD=your-secure-password
 
-```yaml
-# In docker-compose.yml
-environment:
-  - WEBUI_USERNAME=your-secure-username
-  - WEBUI_PASSWORD=your-secure-password
-  - WEBUI_SECRET_KEY=your-secret-key
+# Optional: Set a secure secret key (auto-generated if not set)
+export WEBUI_SECRET_KEY=your-secret-key
 ```
 
 #### Running Locally

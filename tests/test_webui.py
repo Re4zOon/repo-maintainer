@@ -225,6 +225,89 @@ class TestWebUIApp(unittest.TestCase):
         data = json.loads(response.data)
         self.assertIn('error', data)
 
+    def test_update_config_empty_projects(self):
+        """Test updating projects with an empty list."""
+        updates = {
+            'projects': []
+        }
+
+        response = self.client.put(
+            '/api/config',
+            headers={**self.auth_header, 'Content-Type': 'application/json'},
+            data=json.dumps(updates)
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        # Verify
+        response = self.client.get('/api/config', headers=self.auth_header)
+        data = json.loads(response.data)
+        self.assertEqual(data['projects'], [])
+
+    def test_update_config_valid_fallback_email(self):
+        """Test updating fallback_email with a valid email."""
+        updates = {
+            'fallback_email': 'valid@example.com'
+        }
+
+        response = self.client.put(
+            '/api/config',
+            headers={**self.auth_header, 'Content-Type': 'application/json'},
+            data=json.dumps(updates)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.data)
+        self.assertEqual(data['changes']['fallback_email'], 'valid@example.com')
+
+    def test_update_config_invalid_fallback_email(self):
+        """Test updating fallback_email with an invalid email format."""
+        updates = {
+            'fallback_email': 'not-an-email'
+        }
+
+        response = self.client.put(
+            '/api/config',
+            headers={**self.auth_header, 'Content-Type': 'application/json'},
+            data=json.dumps(updates)
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.data)
+        self.assertIn('error', data)
+        self.assertIn('email', data['error'].lower())
+
+    def test_update_config_empty_fallback_email(self):
+        """Test updating fallback_email with an empty string (to clear it)."""
+        updates = {
+            'fallback_email': ''
+        }
+
+        response = self.client.put(
+            '/api/config',
+            headers={**self.auth_header, 'Content-Type': 'application/json'},
+            data=json.dumps(updates)
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_update_config_archive_folder_path_traversal(self):
+        """Test that archive_folder rejects path traversal."""
+        updates = {
+            'archive_folder': '../../../etc/passwd'
+        }
+
+        response = self.client.put(
+            '/api/config',
+            headers={**self.auth_header, 'Content-Type': 'application/json'},
+            data=json.dumps(updates)
+        )
+
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.data)
+        self.assertIn('error', data)
+        self.assertIn('path traversal', data['error'].lower())
+
     def test_update_config_requires_json(self):
         """Test that config update requires JSON content type."""
         response = self.client.put(

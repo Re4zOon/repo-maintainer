@@ -221,16 +221,21 @@
         .then(response => {
             if (response.status === 401) {
                 window.location.reload();
-                return;
+                return null;
             }
             return response.json().then(data => ({ status: response.status, data }));
         })
-        .then(({ status, data }) => {
+        .then(result => {
+            if (!result) {
+                return;
+            }
+            const { status, data } = result;
             if (status === 200) {
                 showStatus('Configuration saved successfully!', 'success');
                 // Reload to get the updated config
                 loadConfig();
             } else {
+                // Safely display error message using textContent
                 showStatus(data.error || 'Error saving configuration', 'error');
             }
         })
