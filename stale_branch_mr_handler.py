@@ -15,6 +15,7 @@ the cleanup period by:
 """
 
 import argparse
+import functools
 import logging
 import os
 import random
@@ -172,9 +173,30 @@ FALLBACK_EMAIL_GREETINGS = [
     ),
 ]
 
-# Cached lists - loaded once and reused
-_cached_mr_comments: Optional[List[str]] = None
-_cached_email_greetings: Optional[List[str]] = None
+# Cache for loaded messages - uses functools.lru_cache for thread-safety
+# The cache is keyed by file path to support different config files
+
+
+@functools.lru_cache(maxsize=16)
+def _load_messages_cached(file_path: str) -> tuple:
+    """
+    Load messages from file with caching.
+
+    Uses lru_cache for thread-safe caching keyed by file path.
+    Returns a tuple for immutability (required by lru_cache).
+
+    Args:
+        file_path: Path to the text file containing messages
+
+    Returns:
+        Tuple of messages loaded from the file
+
+    Raises:
+        FileNotFoundError: If the file does not exist
+        ValueError: If the file contains no valid messages
+    """
+    messages = load_messages_from_file(file_path)
+    return tuple(messages)
 
 
 def load_messages_from_file(file_path: str) -> List[str]:
@@ -247,7 +269,7 @@ def get_mr_reminder_comments(config: Optional[dict] = None) -> List[str]:
     """
     Get the list of MR reminder comments.
 
-    Loads from file on first call and caches the result.
+    Loads from file with thread-safe caching keyed by file path.
     Falls back to hardcoded list if file cannot be loaded.
 
     Args:
@@ -256,28 +278,22 @@ def get_mr_reminder_comments(config: Optional[dict] = None) -> List[str]:
     Returns:
         List of MR reminder comments
     """
-    global _cached_mr_comments
-
-    if _cached_mr_comments is not None:
-        return _cached_mr_comments
-
     file_path = _get_config_file_path(config, 'mr_comments_file', DEFAULT_MR_COMMENTS_FILE)
 
     try:
-        _cached_mr_comments = load_messages_from_file(file_path)
-        logger.info(f"Loaded {len(_cached_mr_comments)} MR reminder comments from {file_path}")
+        comments = _load_messages_cached(file_path)
+        logger.debug(f"Using {len(comments)} MR reminder comments from {file_path}")
+        return list(comments)
     except (FileNotFoundError, ValueError) as e:
         logger.warning(f"Could not load MR comments from file: {e}. Using fallback comments.")
-        _cached_mr_comments = FALLBACK_MR_REMINDER_COMMENTS
-
-    return _cached_mr_comments
+        return list(FALLBACK_MR_REMINDER_COMMENTS)
 
 
 def get_email_greetings(config: Optional[dict] = None) -> List[str]:
     """
     Get the list of email greetings.
 
-    Loads from file on first call and caches the result.
+    Loads from file with thread-safe caching keyed by file path.
     Falls back to hardcoded list if file cannot be loaded.
 
     Args:
@@ -286,21 +302,15 @@ def get_email_greetings(config: Optional[dict] = None) -> List[str]:
     Returns:
         List of email greetings
     """
-    global _cached_email_greetings
-
-    if _cached_email_greetings is not None:
-        return _cached_email_greetings
-
     file_path = _get_config_file_path(config, 'email_greetings_file', DEFAULT_EMAIL_GREETINGS_FILE)
 
     try:
-        _cached_email_greetings = load_messages_from_file(file_path)
-        logger.info(f"Loaded {len(_cached_email_greetings)} email greetings from {file_path}")
+        greetings = _load_messages_cached(file_path)
+        logger.debug(f"Using {len(greetings)} email greetings from {file_path}")
+        return list(greetings)
     except (FileNotFoundError, ValueError) as e:
         logger.warning(f"Could not load email greetings from file: {e}. Using fallback greetings.")
-        _cached_email_greetings = FALLBACK_EMAIL_GREETINGS
-
-    return _cached_email_greetings
+        return list(FALLBACK_EMAIL_GREETINGS)
 
 
 def get_random_mr_comment(config: Optional[dict] = None) -> str:
