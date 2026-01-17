@@ -57,6 +57,27 @@ smtp:
   from_email: "GitLab Maintenance <notifications@example.com>"
 
 # =============================================================================
+# Performance Settings
+# =============================================================================
+# Controls for optimizing performance when working with large repositories
+# and multiple projects.
+
+# Maximum number of worker threads for parallel processing
+# The tool uses parallel processing to:
+# - Process multiple projects concurrently
+# - Fetch branches and merge requests in parallel
+# - Speed up archiving operations
+#
+# Higher values increase speed but also memory and API load.
+# Recommended values:
+# - Small deployments (1-10 projects): 2-4
+# - Medium deployments (10-50 projects): 4-8
+# - Large deployments (50+ projects): 8-16
+#
+# Default: 4
+max_workers: 4
+
+# =============================================================================
 # Custom Message Files (Optional)
 # =============================================================================
 # The bot uses funny messages for emails and MR comments that are loaded from

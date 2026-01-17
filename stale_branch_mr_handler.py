@@ -21,6 +21,7 @@ import os
 import random
 import smtplib
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -123,6 +124,9 @@ DEFAULT_ENABLE_AUTO_ARCHIVE = False
 DEFAULT_ENABLE_MR_COMMENTS = False
 DEFAULT_MR_COMMENT_INACTIVITY_DAYS = 14
 DEFAULT_MR_COMMENT_FREQUENCY_DAYS = 7
+
+# Default configuration values for performance
+DEFAULT_MAX_WORKERS = 4  # Number of concurrent threads for processing multiple projects
 
 # Default paths for data files (relative to script location)
 DEFAULT_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -816,6 +820,85 @@ def post_mr_reminder_comment(
         return False
 
 
+def _process_project_mr_comments(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    inactivity_days: int,
+    frequency_days: int,
+    db_path: str,
+    comments: list,
+    config: dict,
+    dry_run: bool = False
+) -> dict:
+    """
+    Process stale MR comments for a single project.
+
+    This is a helper function designed to be run in parallel for multiple projects.
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        inactivity_days: Days of inactivity threshold
+        frequency_days: Days between comments
+        db_path: Path to database
+        comments: List of comment texts
+        config: Configuration dictionary
+        dry_run: If True, don't actually post comments
+
+    Returns:
+        Summary dict for this project
+    """
+    summary = {
+        'comments_posted': 0,
+        'comments_skipped': 0,
+        'comments_failed': 0,
+        'commented_mrs': []
+    }
+
+    try:
+        # Get stale MRs using the inactivity_days threshold
+        stale_mrs = get_stale_merge_requests(gl, project_id, inactivity_days)
+
+        for mr_info in stale_mrs:
+            mr_iid = mr_info['iid']
+            mr_last_activity = mr_info.get('updated_at')
+
+            # Check if we should post a comment
+            if not should_post_mr_comment(
+                db_path, project_id, mr_iid, mr_last_activity, inactivity_days, frequency_days
+            ):
+                summary['comments_skipped'] += 1
+                logger.debug(
+                    f"Skipping comment for MR !{mr_iid} in project {project_id} - "
+                    f"already commented recently"
+                )
+                continue
+
+            # Get the next comment to use
+            comment_index = get_next_comment_index(db_path, project_id, mr_iid, config)
+            comment_text = comments[comment_index]
+
+            # Post the comment
+            if post_mr_reminder_comment(gl, project_id, mr_iid, comment_text, dry_run=dry_run):
+                summary['comments_posted'] += 1
+                summary['commented_mrs'].append({
+                    'project_id': project_id,
+                    'project_name': mr_info.get('project_name', 'Unknown'),
+                    'mr_iid': mr_iid,
+                    'mr_title': mr_info.get('title', 'Unknown'),
+                })
+                # Record the comment (unless dry run)
+                if not dry_run:
+                    record_mr_comment(db_path, project_id, mr_iid, comment_index)
+            else:
+                summary['comments_failed'] += 1
+
+    except gitlab.exceptions.GitlabGetError as e:
+        logger.error(f"Failed to get project {project_id}: {e}")
+
+    return summary
+
+
 def process_stale_mr_comments(
     gl: gitlab.Gitlab,
     config: dict,
@@ -824,6 +907,7 @@ def process_stale_mr_comments(
     """
     Process stale MRs and post reminder comments where appropriate.
 
+    Uses parallel processing to handle multiple projects concurrently for improved performance.
     This function:
     1. Identifies stale MRs based on inactivity_days config
     2. Checks if a reminder comment should be posted (based on frequency_days)
@@ -842,60 +926,43 @@ def process_stale_mr_comments(
     frequency_days = config.get('mr_comment_frequency_days', DEFAULT_MR_COMMENT_FREQUENCY_DAYS)
     db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
     project_ids = config.get('projects', [])
+    max_workers = config.get('max_workers', DEFAULT_MAX_WORKERS)
 
     # Load comments from file (will be cached after first call)
     comments = get_mr_reminder_comments(config)
 
-    summary = {
+    combined_summary = {
         'comments_posted': 0,
         'comments_skipped': 0,
         'comments_failed': 0,
         'commented_mrs': []
     }
 
-    for project_id in project_ids:
-        try:
-            # Get stale MRs using the inactivity_days threshold
-            stale_mrs = get_stale_merge_requests(gl, project_id, inactivity_days)
+    # Process projects in parallel for better performance
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all project processing tasks
+        future_to_project = {
+            executor.submit(
+                _process_project_mr_comments,
+                gl, project_id, inactivity_days, frequency_days,
+                db_path, comments, config, dry_run
+            ): project_id
+            for project_id in project_ids
+        }
 
-            for mr_info in stale_mrs:
-                mr_iid = mr_info['iid']
-                mr_last_activity = mr_info.get('updated_at')
+        # Collect results as they complete
+        for future in as_completed(future_to_project):
+            project_id = future_to_project[future]
+            try:
+                project_summary = future.result()
+                combined_summary['comments_posted'] += project_summary['comments_posted']
+                combined_summary['comments_skipped'] += project_summary['comments_skipped']
+                combined_summary['comments_failed'] += project_summary['comments_failed']
+                combined_summary['commented_mrs'].extend(project_summary['commented_mrs'])
+            except Exception as e:
+                logger.error(f"Error processing MR comments for project {project_id}: {e}")
 
-                # Check if we should post a comment
-                if not should_post_mr_comment(
-                    db_path, project_id, mr_iid, mr_last_activity, inactivity_days, frequency_days
-                ):
-                    summary['comments_skipped'] += 1
-                    logger.debug(
-                        f"Skipping comment for MR !{mr_iid} in project {project_id} - "
-                        f"already commented recently"
-                    )
-                    continue
-
-                # Get the next comment to use
-                comment_index = get_next_comment_index(db_path, project_id, mr_iid, config)
-                comment_text = comments[comment_index]
-
-                # Post the comment
-                if post_mr_reminder_comment(gl, project_id, mr_iid, comment_text, dry_run=dry_run):
-                    summary['comments_posted'] += 1
-                    summary['commented_mrs'].append({
-                        'project_id': project_id,
-                        'project_name': mr_info.get('project_name', 'Unknown'),
-                        'mr_iid': mr_iid,
-                        'mr_title': mr_info.get('title', 'Unknown'),
-                    })
-                    # Record the comment (unless dry run)
-                    if not dry_run:
-                        record_mr_comment(db_path, project_id, mr_iid, comment_index)
-                else:
-                    summary['comments_failed'] += 1
-
-        except gitlab.exceptions.GitlabGetError as e:
-            logger.error(f"Failed to get project {project_id}: {e}")
-
-    return summary
+    return combined_summary
 
 
 # =============================================================================
@@ -1000,6 +1067,8 @@ def get_stale_branches(gl: gitlab.Gitlab, project_id: int, stale_days: int) -> l
     """
     Get branches from a project where the last commit is older than stale_days.
 
+    Uses pagination to efficiently handle large repositories with many branches.
+
     Args:
         gl: Authenticated GitLab client
         project_id: GitLab project ID
@@ -1012,9 +1081,11 @@ def get_stale_branches(gl: gitlab.Gitlab, project_id: int, stale_days: int) -> l
     stale_branches = []
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=stale_days)
 
-    protected_branches = {pb.name for pb in project.protectedbranches.list(all=True)}
+    # Use pagination for protected branches to reduce memory usage
+    protected_branches = {pb.name for pb in project.protectedbranches.list(iterator=True)}
 
-    for branch in project.branches.list(all=True):
+    # Use iterator for memory-efficient iteration over all branches
+    for branch in project.branches.list(iterator=True):
         if branch.name in protected_branches:
             logger.debug(f"Skipping protected branch: {branch.name}")
             continue
@@ -1227,6 +1298,7 @@ def get_stale_merge_requests(gl: gitlab.Gitlab, project_id: int, stale_days: int
     """
     Get all open merge requests from a project that have no recent activity.
 
+    Uses pagination to efficiently handle large repositories with many MRs.
     Staleness is determined by checking both the MR's updated_at and the most
     recent note/comment activity.
 
@@ -1243,8 +1315,8 @@ def get_stale_merge_requests(gl: gitlab.Gitlab, project_id: int, stale_days: int
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=stale_days)
 
     try:
-        # Get all open merge requests
-        mrs = project.mergerequests.list(state='opened', all=True)
+        # Use iterator for memory-efficient iteration over all open merge requests
+        mrs = project.mergerequests.list(state='opened', iterator=True)
 
         for mr in mrs:
             mr_info = _build_mr_info_dict(project, mr)
@@ -1605,6 +1677,88 @@ def archive_stale_mr(
     return result
 
 
+def _process_project_for_archiving(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    stale_days: int,
+    cleanup_weeks: int
+) -> tuple:
+    """
+    Process a single project to find items ready for archiving.
+
+    This is a helper function designed to be run in parallel for multiple projects.
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        stale_days: Number of days for stale threshold
+        cleanup_weeks: Number of weeks for cleanup threshold
+
+    Returns:
+        Tuple of (branches_to_archive, mrs_to_archive) for this project
+    """
+    branches_to_archive = []
+    mrs_to_archive = []
+    branches_with_mrs = set()
+
+    try:
+        project = gl.projects.get(project_id)
+
+        # First, get all stale MRs and check if they're ready for archiving
+        stale_mrs = get_stale_merge_requests(gl, project_id, stale_days)
+
+        for mr_info in stale_mrs:
+            branch_key = (project_id, mr_info['branch_name'])
+            branches_with_mrs.add(branch_key)
+
+            last_activity = mr_info.get('updated_at')
+            if is_ready_for_archiving(last_activity, stale_days, cleanup_weeks):
+                mrs_to_archive.append(mr_info)
+                logger.debug(
+                    f"MR !{mr_info['iid']} in '{mr_info['project_name']}' "
+                    f"is ready for archiving"
+                )
+
+        # Next, get stale branches without MRs
+        stale_branches = get_stale_branches(gl, project_id, stale_days)
+
+        for branch in stale_branches:
+            branch_key = (project_id, branch['branch_name'])
+
+            # Skip branches that have MRs (we already handled those)
+            if branch_key in branches_with_mrs:
+                continue
+
+            # Check if there's an open MR for this branch (might not be stale)
+            mr_info = get_merge_request_for_branch(project, branch['branch_name'])
+            if mr_info:
+                # Branch has an active MR, skip it
+                continue
+
+            # Parse the commit date to check if ready for archiving
+            try:
+                commit_date = parse_commit_date(
+                    branch['last_commit_date'].replace(' ', 'T') + '+00:00'
+                )
+            except ValueError:
+                logger.warning(
+                    f"Could not parse date for branch '{branch['branch_name']}', skipping"
+                )
+                continue
+
+            if is_ready_for_archiving(commit_date, stale_days, cleanup_weeks):
+                branches_to_archive.append(branch)
+                logger.debug(
+                    f"Branch '{branch['branch_name']}' in '{branch['project_name']}' "
+                    f"is ready for archiving"
+                )
+
+    except gitlab.exceptions.GitlabGetError as e:
+        logger.error(f"Failed to get project {project_id}: {e}")
+
+    return branches_to_archive, mrs_to_archive
+
+
 def get_branches_ready_for_archiving(
     gl: gitlab.Gitlab,
     config: dict
@@ -1612,6 +1766,7 @@ def get_branches_ready_for_archiving(
     """
     Get branches and MRs that are ready for archiving.
 
+    Uses parallel processing to handle multiple projects concurrently for improved performance.
     An item is ready for archiving if it has been stale for at least
     stale_days + (cleanup_weeks * 7) days.
 
@@ -1625,68 +1780,30 @@ def get_branches_ready_for_archiving(
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
     project_ids = config.get('projects', [])
+    max_workers = config.get('max_workers', DEFAULT_MAX_WORKERS)
 
-    branches_to_archive = []
-    mrs_to_archive = []
-    branches_with_mrs = set()
+    all_branches_to_archive = []
+    all_mrs_to_archive = []
 
-    for project_id in project_ids:
-        try:
-            project = gl.projects.get(project_id)
+    # Process projects in parallel for better performance
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all project processing tasks
+        future_to_project = {
+            executor.submit(_process_project_for_archiving, gl, project_id, stale_days, cleanup_weeks): project_id
+            for project_id in project_ids
+        }
 
-            # First, get all stale MRs and check if they're ready for archiving
-            stale_mrs = get_stale_merge_requests(gl, project_id, stale_days)
+        # Collect results as they complete
+        for future in as_completed(future_to_project):
+            project_id = future_to_project[future]
+            try:
+                branches, mrs = future.result()
+                all_branches_to_archive.extend(branches)
+                all_mrs_to_archive.extend(mrs)
+            except Exception as e:
+                logger.error(f"Error processing project {project_id} for archiving: {e}")
 
-            for mr_info in stale_mrs:
-                branch_key = (project_id, mr_info['branch_name'])
-                branches_with_mrs.add(branch_key)
-
-                last_activity = mr_info.get('updated_at')
-                if is_ready_for_archiving(last_activity, stale_days, cleanup_weeks):
-                    mrs_to_archive.append(mr_info)
-                    logger.debug(
-                        f"MR !{mr_info['iid']} in '{mr_info['project_name']}' "
-                        f"is ready for archiving"
-                    )
-
-            # Next, get stale branches without MRs
-            stale_branches = get_stale_branches(gl, project_id, stale_days)
-
-            for branch in stale_branches:
-                branch_key = (project_id, branch['branch_name'])
-
-                # Skip branches that have MRs (we already handled those)
-                if branch_key in branches_with_mrs:
-                    continue
-
-                # Check if there's an open MR for this branch (might not be stale)
-                mr_info = get_merge_request_for_branch(project, branch['branch_name'])
-                if mr_info:
-                    # Branch has an active MR, skip it
-                    continue
-
-                # Parse the commit date to check if ready for archiving
-                try:
-                    commit_date = parse_commit_date(
-                        branch['last_commit_date'].replace(' ', 'T') + '+00:00'
-                    )
-                except ValueError:
-                    logger.warning(
-                        f"Could not parse date for branch '{branch['branch_name']}', skipping"
-                    )
-                    continue
-
-                if is_ready_for_archiving(commit_date, stale_days, cleanup_weeks):
-                    branches_to_archive.append(branch)
-                    logger.debug(
-                        f"Branch '{branch['branch_name']}' in '{branch['project_name']}' "
-                        f"is ready for archiving"
-                    )
-
-        except gitlab.exceptions.GitlabGetError as e:
-            logger.error(f"Failed to get project {project_id}: {e}")
-
-    return branches_to_archive, mrs_to_archive
+    return all_branches_to_archive, all_mrs_to_archive
 
 
 def perform_automatic_archiving(config: dict, dry_run: bool = False) -> dict:
@@ -1883,6 +2000,106 @@ def get_mr_notification_email(gl: gitlab.Gitlab, mr_info: dict, fallback_email: 
     return fallback_email
 
 
+def _process_project_stale_items(
+    gl: gitlab.Gitlab,
+    project_id: int,
+    stale_days: int,
+    fallback_email: str
+) -> tuple:
+    """
+    Process a single project to collect stale items.
+
+    This is a helper function designed to be run in parallel for multiple projects.
+
+    Args:
+        gl: Authenticated GitLab client
+        project_id: GitLab project ID
+        stale_days: Number of days for stale threshold
+        fallback_email: Fallback email for notifications
+
+    Returns:
+        Tuple of (email_to_items, skipped_items, branches_with_mrs) for this project
+    """
+    email_to_items = {}
+    skipped_items = []
+    branches_with_mrs = set()
+
+    try:
+        project = gl.projects.get(project_id)
+
+        # First, get all stale MRs directly (this catches MRs even if branch has recent commits)
+        stale_mrs = get_stale_merge_requests(gl, project_id, stale_days)
+
+        for mr_info in stale_mrs:
+            # Track this branch as having an MR
+            branch_key = (project_id, mr_info['branch_name'])
+            branches_with_mrs.add(branch_key)
+
+            # Get notification email using MR priority: Assignee → Author → Default
+            notification_email = get_mr_notification_email(gl, mr_info, fallback_email)
+
+            if notification_email:
+                if notification_email not in email_to_items:
+                    email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
+                email_to_items[notification_email]['merge_requests'].append(mr_info)
+            else:
+                skipped_items.append({'type': 'merge_request', 'info': mr_info})
+                logger.warning(
+                    f"No notification email available for merge request "
+                    f"!{mr_info['iid']} in project '{mr_info['project_name']}'. "
+                    f"Configure 'fallback_email' to avoid missing notifications."
+                )
+
+        # Next, get stale branches that don't have MRs
+        branches = get_stale_branches(gl, project_id, stale_days)
+
+        for branch in branches:
+            branch_key = (project_id, branch['branch_name'])
+
+            # Skip branches that already have an MR (we already handled those above)
+            if branch_key in branches_with_mrs:
+                logger.debug(
+                    f"Skipping branch '{branch['branch_name']}' - already has stale MR"
+                )
+                continue
+
+            # Check if there's an open MR for this branch (might not be stale MR)
+            mr_info = get_merge_request_for_branch(project, branch['branch_name'])
+
+            if mr_info:
+                # Branch has an MR, but MR is not stale (has recent activity)
+                # Skip this branch - the MR takes precedence and is not stale
+                logger.debug(
+                    f"Skipping branch '{branch['branch_name']}' - has active MR !{mr_info['iid']}"
+                )
+                continue
+
+            # No MR for this branch - notify about the stale branch
+            committer_email = branch.get('committer_email') or branch.get('author_email', '')
+            if not committer_email:
+                notification_email = fallback_email
+            else:
+                notification_email = get_notification_email(gl, committer_email, fallback_email)
+
+            if notification_email:
+                if notification_email not in email_to_items:
+                    email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
+                email_to_items[notification_email]['branches'].append(branch)
+            else:
+                skipped_items.append({'type': 'branch', 'info': branch})
+                logger.warning(
+                    f"No notification email available for stale branch "
+                    f"'{branch['branch_name']}' in project '{branch['project_name']}'. "
+                    f"Original committer: {committer_email or 'unknown'}. "
+                    f"Configure 'fallback_email' to avoid missing notifications."
+                )
+
+    except gitlab.exceptions.GitlabGetError as e:
+        logger.error(f"Failed to get project {project_id}: {e}")
+
+    return email_to_items, skipped_items, branches_with_mrs
+
+
 def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     """
     Collect stale branches and merge requests from configured projects and group by email.
@@ -1891,6 +2108,7 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     1. Stale MRs - Open MRs with no recent activity (commits, comments, etc.)
     2. Stale branches without MRs - Branches with old commits that don't have an open MR
 
+    Uses parallel processing to handle multiple projects concurrently for improved performance.
     Staleness for MRs is determined by the latest activity including notes/comments.
     Notification priority for MRs: Assignee → Author → Default (with active user checks).
 
@@ -1904,94 +2122,44 @@ def collect_stale_items_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     stale_days = config.get('stale_days', 30)
     fallback_email = config.get('fallback_email', '')
     project_ids = config.get('projects', [])
+    max_workers = config.get('max_workers', DEFAULT_MAX_WORKERS)
 
     email_to_items = {}
-    skipped_items = []
-    # Track which branches have MRs to avoid duplicate notifications
-    branches_with_mrs = set()
+    all_skipped_items = []
 
-    for project_id in project_ids:
-        try:
-            project = gl.projects.get(project_id)
+    # Process projects in parallel for better performance with large numbers of projects
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all project processing tasks
+        future_to_project = {
+            executor.submit(_process_project_stale_items, gl, project_id, stale_days, fallback_email): project_id
+            for project_id in project_ids
+        }
 
-            # First, get all stale MRs directly (this catches MRs even if branch has recent commits)
-            stale_mrs = get_stale_merge_requests(gl, project_id, stale_days)
+        # Collect results as they complete
+        for future in as_completed(future_to_project):
+            project_id = future_to_project[future]
+            try:
+                project_email_items, project_skipped, _ = future.result()
 
-            for mr_info in stale_mrs:
-                # Track this branch as having an MR
-                branch_key = (project_id, mr_info['branch_name'])
-                branches_with_mrs.add(branch_key)
+                # Merge results from this project into the overall results
+                for email, items in project_email_items.items():
+                    if email not in email_to_items:
+                        email_to_items[email] = {'branches': [], 'merge_requests': []}
+                    email_to_items[email]['branches'].extend(items['branches'])
+                    email_to_items[email]['merge_requests'].extend(items['merge_requests'])
 
-                # Get notification email using MR priority: Assignee → Author → Default
-                notification_email = get_mr_notification_email(gl, mr_info, fallback_email)
+                all_skipped_items.extend(project_skipped)
 
-                if notification_email:
-                    if notification_email not in email_to_items:
-                        email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
-                    email_to_items[notification_email]['merge_requests'].append(mr_info)
-                else:
-                    skipped_items.append({'type': 'merge_request', 'info': mr_info})
-                    logger.warning(
-                        f"No notification email available for merge request "
-                        f"!{mr_info['iid']} in project '{mr_info['project_name']}'. "
-                        f"Configure 'fallback_email' to avoid missing notifications."
-                    )
+            except Exception as e:
+                logger.error(f"Error processing project {project_id}: {e}")
 
-            # Next, get stale branches that don't have MRs
-            branches = get_stale_branches(gl, project_id, stale_days)
-
-            for branch in branches:
-                branch_key = (project_id, branch['branch_name'])
-
-                # Skip branches that already have an MR (we already handled those above)
-                if branch_key in branches_with_mrs:
-                    logger.debug(
-                        f"Skipping branch '{branch['branch_name']}' - already has stale MR"
-                    )
-                    continue
-
-                # Check if there's an open MR for this branch (might not be stale MR)
-                mr_info = get_merge_request_for_branch(project, branch['branch_name'])
-
-                if mr_info:
-                    # Branch has an MR, but MR is not stale (has recent activity)
-                    # Skip this branch - the MR takes precedence and is not stale
-                    logger.debug(
-                        f"Skipping branch '{branch['branch_name']}' - has active MR !{mr_info['iid']}"
-                    )
-                    continue
-
-                # No MR for this branch - notify about the stale branch
-                committer_email = branch.get('committer_email') or branch.get('author_email', '')
-                if not committer_email:
-                    notification_email = fallback_email
-                else:
-                    notification_email = get_notification_email(gl, committer_email, fallback_email)
-
-                if notification_email:
-                    if notification_email not in email_to_items:
-                        email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
-                    email_to_items[notification_email]['branches'].append(branch)
-                else:
-                    skipped_items.append({'type': 'branch', 'info': branch})
-                    logger.warning(
-                        f"No notification email available for stale branch "
-                        f"'{branch['branch_name']}' in project '{branch['project_name']}'. "
-                        f"Original committer: {committer_email or 'unknown'}. "
-                        f"Configure 'fallback_email' to avoid missing notifications."
-                    )
-
-        except gitlab.exceptions.GitlabGetError as e:
-            logger.error(f"Failed to get project {project_id}: {e}")
-
-    if skipped_items:
+    if all_skipped_items:
         logger.warning(
-            f"Total of {len(skipped_items)} stale item(s) skipped due to "
+            f"Total of {len(all_skipped_items)} stale item(s) skipped due to "
             f"missing notification email. Configure 'fallback_email' to receive notifications."
         )
 
     return email_to_items
-
 
 def collect_stale_branches_by_email(gl: gitlab.Gitlab, config: dict) -> dict:
     """
