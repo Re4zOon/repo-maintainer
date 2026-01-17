@@ -74,6 +74,7 @@
         <h3>📋 Recent Notifications</h3>
         <div class="table-container">
             <table id="recent-notifications-table">
+                <caption class="sr-only">Recent notification history</caption>
                 <thead>
                     <tr>
                         <th>Recipient</th>
@@ -96,6 +97,7 @@
         <h3>💬 Recent MR Comments</h3>
         <div class="table-container">
             <table id="recent-comments-table">
+                <caption class="sr-only">Recent MR comments history</caption>
                 <thead>
                     <tr>
                         <th>Project ID</th>
@@ -114,8 +116,8 @@
     </div>
 
     <div class="actions">
-        <button id="refresh-stats" class="btn btn-primary">🔄 Refresh Stats</button>
-        <button id="export-stats" class="btn btn-secondary">📥 Export as JSON</button>
+        <button id="refresh-stats" class="btn btn-primary" aria-label="Refresh dashboard statistics">🔄 Refresh Stats</button>
+        <button id="export-stats" class="btn btn-secondary" aria-label="Export dashboard statistics as JSON file">📥 Export as JSON</button>
     </div>
 </div>
 {% endblock %}
@@ -184,7 +186,7 @@
             notificationsBody.innerHTML = stats.notifications.recent.map(n => `
                 <tr>
                     <td>${escapeHtml(n.recipient)}</td>
-                    <td><span class="badge badge-${n.type}">${n.type}</span></td>
+                    <td><span class="badge badge-${escapeHtml(n.type)}">${escapeHtml(n.type)}</span></td>
                     <td>${n.project_id}</td>
                     <td>${escapeHtml(n.item)}</td>
                     <td>${formatDate(n.notified_at)}</td>
