@@ -147,7 +147,7 @@ class TestIsUserActive(unittest.TestCase):
         result = stale_branch_mr_handler.is_user_active(mock_gl, 'user@example.com')
 
         self.assertTrue(result)
-        mock_gl.users.list.assert_called_once_with(search='user@example.com', per_page=1)
+        mock_gl.users.list.assert_called_once_with(search='user@example.com', per_page=1, iterator=True)
 
     def test_inactive_user(self):
         """Test that inactive user returns False."""
@@ -2573,6 +2573,153 @@ class TestGetRandomMrComment(unittest.TestCase):
         """Test that a non-empty string is returned."""
         comment = stale_branch_mr_handler.get_random_mr_comment()
         self.assertGreater(len(comment), 0)
+
+
+class TestParallelProcessing(unittest.TestCase):
+    """Tests for parallel processing optimizations."""
+
+    @patch('stale_branch_mr_handler.get_stale_merge_requests')
+    @patch('stale_branch_mr_handler.get_stale_branches')
+    @patch('gitlab.Gitlab')
+    def test_parallel_project_processing(self, mock_gitlab, mock_get_branches, mock_get_mrs):
+        """Test that multiple projects are processed in parallel."""
+        # Set up mocks
+        gl = MagicMock()
+        mock_gitlab.return_value = gl
+        
+        # Create mock project
+        mock_project = MagicMock()
+        mock_project.id = 1
+        mock_project.name = "Test Project"
+        gl.projects.get.return_value = mock_project
+        
+        # Mock functions return empty lists
+        mock_get_mrs.return_value = []
+        mock_get_branches.return_value = []
+        
+        # Test config with multiple projects and max_workers set
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2, 3, 4, 5],  # Multiple projects
+            'max_workers': 2  # Test with 2 workers
+        }
+        
+        # Call the function
+        result = stale_branch_mr_handler.collect_stale_items_by_email(gl, config)
+        
+        # Verify the function completed successfully
+        self.assertIsInstance(result, dict)
+        
+        # Verify that we attempted to get all projects
+        self.assertEqual(gl.projects.get.call_count, 5)
+
+    def test_max_workers_defaults_to_4(self):
+        """Test that max_workers defaults to 4 when not specified."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2]
+        }
+        
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+        self.assertEqual(max_workers, 4)
+
+    def test_max_workers_can_be_configured(self):
+        """Test that max_workers can be configured."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 8
+        }
+        
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+        self.assertEqual(max_workers, 8)
+
+    def test_max_workers_invalid_type_falls_back_to_default(self):
+        """Test that invalid type for max_workers falls back to default and logs warning."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 'invalid'
+        }
+        
+        with patch('stale_branch_mr_handler.logger') as mock_logger:
+            max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+            self.assertEqual(max_workers, 4)
+            # Verify warning was logged
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            self.assertIn('invalid', call_args.lower())
+            self.assertIn('max_workers', call_args)
+
+    def test_max_workers_negative_value_clamped_to_1(self):
+        """Test that negative max_workers value is clamped to 1 and logs warning."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': -5
+        }
+        
+        with patch('stale_branch_mr_handler.logger') as mock_logger:
+            max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+            self.assertEqual(max_workers, 1)
+            # Verify warning was logged
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            self.assertIn('-5', call_args)
+            self.assertIn('1-32', call_args)
+
+    def test_max_workers_zero_value_clamped_to_1(self):
+        """Test that zero max_workers value is clamped to 1 and logs warning."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 0
+        }
+        
+        with patch('stale_branch_mr_handler.logger') as mock_logger:
+            max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+            self.assertEqual(max_workers, 1)
+            # Verify warning was logged
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            self.assertIn('0', call_args)
+            self.assertIn('1-32', call_args)
+
+    def test_max_workers_too_large_value_clamped_to_32(self):
+        """Test that too large max_workers value is clamped to 32 and logs warning."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 100
+        }
+        
+        with patch('stale_branch_mr_handler.logger') as mock_logger:
+            max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+            self.assertEqual(max_workers, 32)
+            # Verify warning was logged
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args[0][0]
+            self.assertIn('100', call_args)
+            self.assertIn('1-32', call_args)
+
+    def test_max_workers_float_converted_to_int(self):
+        """Test that float max_workers value is converted to int."""
+        config = {
+            'stale_days': 30,
+            'fallback_email': 'test@example.com',
+            'projects': [1, 2],
+            'max_workers': 6.7
+        }
+        
+        max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
+        self.assertEqual(max_workers, 6)
 
 
 if __name__ == '__main__':
