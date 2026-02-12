@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
-GitLab Stale Branch/Merge Request Notifier and Auto-Archiver
+Stale Branch/Merge Request Notifier and Auto-Archiver
 
-This script identifies stale branches in GitLab projects and sends
+This script identifies stale branches in GitLab or GitHub projects and sends
 email notifications to their committers about upcoming cleanup.
-If a merge request exists for a stale branch, it notifies about the MR instead.
+If a merge request (or pull request on GitHub) exists for a stale branch,
+it notifies about that instead.
 
 It can also perform automatic archiving of stale branches/MRs that have exceeded
 the cleanup period by:
 - Exporting the branch to a local archive folder
 - Compressing the export to save space
-- Closing any associated merge requests
+- Closing any associated merge/pull requests
 - Deleting the branch
+
+Supported platforms:
+- GitLab (via python-gitlab)
+- GitHub (via PyGithub)
 """
 
 import argparse
@@ -30,6 +35,13 @@ from typing import List, Optional
 import gitlab
 import yaml
 from jinja2 import Template
+
+try:
+    import github as github_module
+    from github import Github, GithubException
+    HAS_GITHUB = True
+except ImportError:
+    HAS_GITHUB = False
 
 
 logging.basicConfig(
@@ -56,7 +68,7 @@ EMAIL_TEMPLATE = """
 </head>
 <body>
     <div class="header">
-        <h1>GitLab Branch Cleanup Notification</h1>
+        <h1>Branch Cleanup Notification</h1>
     </div>
     <div class="content">
         <p>Hello,</p>
@@ -106,7 +118,7 @@ EMAIL_TEMPLATE = """
 
         <p>Thanks for keeping things tidy — your future self will thank you.</p>
 
-        <p>Best regards,<br>GitLab Repository Maintenance Team 🧹</p>
+        <p>Best regards,<br>Repository Maintenance Team 🧹</p>
     </div>
 </body>
 </html>
@@ -1014,24 +1026,43 @@ def validate_config(config: dict) -> None:
     """
     Validate that all required configuration keys are present.
 
+    Supports both GitLab and GitHub platforms based on the 'platform' key.
+    When platform is 'gitlab' (default), requires 'gitlab' section.
+    When platform is 'github', requires 'github' section.
+
     Args:
         config: Configuration dictionary to validate
 
     Raises:
         ConfigurationError: If required keys are missing
     """
-    required_gitlab_keys = ['url', 'private_token']
     required_smtp_keys = ['host', 'port', 'from_email']
 
     if not config:
         raise ConfigurationError("Configuration is empty")
 
-    if 'gitlab' not in config:
-        raise ConfigurationError("Missing 'gitlab' section in configuration")
+    platform = config.get('platform', 'gitlab')
 
-    for key in required_gitlab_keys:
-        if key not in config['gitlab']:
-            raise ConfigurationError(f"Missing required GitLab config key: '{key}'")
+    if platform == 'github':
+        if not HAS_GITHUB:
+            raise ConfigurationError(
+                "PyGithub is required for GitHub support. "
+                "Install it with: pip install PyGithub"
+            )
+        if 'github' not in config:
+            raise ConfigurationError("Missing 'github' section in configuration")
+        required_github_keys = ['token']
+        for key in required_github_keys:
+            if key not in config['github']:
+                raise ConfigurationError(f"Missing required GitHub config key: '{key}'")
+    else:
+        # Default: GitLab
+        required_gitlab_keys = ['url', 'private_token']
+        if 'gitlab' not in config:
+            raise ConfigurationError("Missing 'gitlab' section in configuration")
+        for key in required_gitlab_keys:
+            if key not in config['gitlab']:
+                raise ConfigurationError(f"Missing required GitLab config key: '{key}'")
 
     if 'smtp' not in config:
         raise ConfigurationError("Missing 'smtp' section in configuration")
@@ -1065,6 +1096,51 @@ def create_gitlab_client(config: dict) -> gitlab.Gitlab:
     )
     gl.auth()
     return gl
+
+
+def create_github_client(config: dict):
+    """
+    Create and authenticate a GitHub client.
+
+    Args:
+        config: Configuration dictionary with 'github' section
+
+    Returns:
+        Authenticated PyGithub Github client
+
+    Raises:
+        ConfigurationError: If PyGithub is not installed
+    """
+    if not HAS_GITHUB:
+        raise ConfigurationError(
+            "PyGithub is required for GitHub support. "
+            "Install it with: pip install PyGithub"
+        )
+    token = config['github']['token']
+    api_url = config['github'].get('api_url')
+    if api_url:
+        gh = Github(login_or_token=token, base_url=api_url)
+    else:
+        gh = Github(login_or_token=token)
+    # Verify authentication by fetching the authenticated user
+    gh.get_user().login
+    return gh
+
+
+def create_platform_client(config: dict):
+    """
+    Create the appropriate platform client based on configuration.
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        Authenticated platform client (GitLab or GitHub)
+    """
+    platform = config.get('platform', 'gitlab')
+    if platform == 'github':
+        return create_github_client(config)
+    return create_gitlab_client(config)
 
 
 def parse_commit_date(date_str: str) -> datetime:
@@ -2322,10 +2398,1036 @@ def send_email(
         return False
 
 
+# =============================================================================
+# GitHub Platform Functions
+# =============================================================================
+
+
+def github_get_stale_branches(gh, repo_name: str, stale_days: int) -> list:
+    """
+    Get branches from a GitHub repository where the last commit is older than stale_days.
+
+    Args:
+        gh: Authenticated GitHub client
+        repo_name: Repository name in "owner/repo" format
+        stale_days: Number of days after which a branch is considered stale
+
+    Returns:
+        List of stale branch information dictionaries
+    """
+    repo = gh.get_repo(repo_name)
+    stale_branches = []
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=stale_days)
+
+    # Get protected branches
+    try:
+        protected_branches = set()
+        for branch in repo.get_branches():
+            if branch.protected:
+                protected_branches.add(branch.name)
+    except GithubException as e:
+        logger.warning(f"Error fetching branch protection info for {repo_name}: {e}")
+        protected_branches = set()
+
+    for branch in repo.get_branches():
+        if branch.name in protected_branches:
+            logger.debug(f"Skipping protected branch: {branch.name}")
+            continue
+
+        commit = branch.commit
+        try:
+            commit_date = commit.commit.committer.date
+            if commit_date.tzinfo is None:
+                commit_date = commit_date.replace(tzinfo=timezone.utc)
+        except (AttributeError, TypeError) as e:
+            logger.warning(
+                f"Could not get commit date for branch {branch.name}: {e}. Skipping."
+            )
+            continue
+
+        if commit_date < cutoff_date:
+            author_name = 'Unknown'
+            author_email = ''
+            committer_email = ''
+            try:
+                author_name = commit.commit.author.name or 'Unknown'
+                author_email = commit.commit.author.email or ''
+                committer_email = commit.commit.committer.email or ''
+            except AttributeError:
+                pass
+
+            stale_branches.append({
+                'project_id': repo_name,
+                'project_name': repo.name,
+                'branch_name': branch.name,
+                'last_commit_date': commit_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'author_name': author_name,
+                'author_email': author_email,
+                'committer_email': committer_email,
+            })
+
+    return stale_branches
+
+
+def github_get_pr_last_activity_date(pr) -> Optional[datetime]:
+    """
+    Get the last activity date for a GitHub pull request, including comments.
+
+    Args:
+        pr: GitHub PullRequest object
+
+    Returns:
+        The most recent activity datetime, or None if cannot be determined
+    """
+    last_activity = None
+
+    try:
+        updated_at = pr.updated_at
+        if updated_at:
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            last_activity = updated_at
+    except (AttributeError, TypeError):
+        pass
+
+    # Check comments for more recent activity
+    try:
+        comments = pr.get_issue_comments()
+        if comments.totalCount > 0:
+            # Get the last comment
+            last_comment = None
+            for comment in comments:
+                last_comment = comment
+            if last_comment:
+                comment_date = last_comment.updated_at or last_comment.created_at
+                if comment_date:
+                    if comment_date.tzinfo is None:
+                        comment_date = comment_date.replace(tzinfo=timezone.utc)
+                    if last_activity is None or comment_date > last_activity:
+                        last_activity = comment_date
+    except GithubException as e:
+        logger.debug(f"Error fetching comments for PR #{pr.number}: {e}")
+
+    return last_activity
+
+
+def _build_github_pr_info_dict(repo, pr, branch_name: Optional[str] = None) -> dict:
+    """
+    Build a standardized PR info dictionary from a GitHub PR object.
+
+    Uses the same keys as GitLab MR info dicts for compatibility.
+
+    Args:
+        repo: GitHub Repository object
+        pr: GitHub PullRequest object
+        branch_name: Optional source branch name
+
+    Returns:
+        Dictionary with PR information (compatible with MR info format)
+    """
+    assignee_email = ''
+    assignee_username = ''
+    author_email = ''
+    author_username = ''
+    author_name = 'Unknown'
+
+    if pr.assignee:
+        assignee_username = pr.assignee.login or ''
+        assignee_email = pr.assignee.email or ''
+    if pr.user:
+        author_username = pr.user.login or ''
+        author_email = pr.user.email or ''
+        author_name = pr.user.name or pr.user.login or 'Unknown'
+
+    last_activity_date = github_get_pr_last_activity_date(pr)
+
+    if last_activity_date:
+        last_updated = last_activity_date.strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        last_updated = str(getattr(pr, 'updated_at', 'Unknown'))
+
+    source_branch = branch_name if branch_name else (pr.head.ref if pr.head else 'Unknown')
+
+    return {
+        'iid': pr.number,
+        'title': pr.title,
+        'web_url': pr.html_url,
+        'branch_name': source_branch,
+        'project_id': repo.full_name,
+        'project_name': repo.name,
+        'assignee_email': assignee_email,
+        'assignee_username': assignee_username,
+        'author_email': author_email,
+        'author_name': author_name,
+        'author_username': author_username,
+        'last_updated': last_updated,
+        'updated_at': last_activity_date,
+    }
+
+
+def github_get_merge_request_for_branch(repo, branch_name: str) -> Optional[dict]:
+    """
+    Get an open pull request for the given branch on GitHub, if one exists.
+
+    Args:
+        repo: GitHub Repository object
+        branch_name: Name of the head branch
+
+    Returns:
+        Dictionary with PR information if found, None otherwise
+    """
+    try:
+        pulls = repo.get_pulls(state='open', head=f"{repo.owner.login}:{branch_name}")
+        for pr in pulls:
+            return _build_github_pr_info_dict(repo, pr, branch_name)
+    except GithubException as e:
+        logger.warning(f"Error fetching pull requests for branch {branch_name}: {e}")
+    return None
+
+
+def github_get_stale_pull_requests(gh, repo_name: str, stale_days: int) -> list:
+    """
+    Get all open pull requests from a GitHub repo that have no recent activity.
+
+    Args:
+        gh: Authenticated GitHub client
+        repo_name: Repository name in "owner/repo" format
+        stale_days: Number of days after which a PR is considered stale
+
+    Returns:
+        List of stale PR information dictionaries (compatible with MR info format)
+    """
+    repo = gh.get_repo(repo_name)
+    stale_prs = []
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=stale_days)
+
+    try:
+        pulls = repo.get_pulls(state='open')
+        for pr in pulls:
+            pr_info = _build_github_pr_info_dict(repo, pr)
+            last_activity = pr_info.get('updated_at')
+
+            if last_activity and last_activity < cutoff_date:
+                stale_prs.append(pr_info)
+            elif last_activity is None:
+                logger.debug(
+                    f"Could not determine last activity for PR #{pr.number} "
+                    f"in repo '{repo.name}'. Skipping staleness check."
+                )
+
+    except GithubException as e:
+        logger.error(f"Error fetching pull requests for repo {repo_name}: {e}")
+
+    return stale_prs
+
+
+def github_is_user_active(gh, email: str) -> bool:
+    """
+    Check if a GitHub user with the given email is active.
+
+    On GitHub, if a user can be found by email search, they are considered active
+    (GitHub does not expose a 'blocked' state like GitLab).
+
+    Args:
+        gh: Authenticated GitHub client
+        email: User's email address
+
+    Returns:
+        True if user is found, False otherwise
+    """
+    try:
+        users = gh.search_users(f"{email} in:email")
+        for user in users:
+            return True
+    except GithubException as e:
+        logger.warning(f"Error checking user status for {email}: {e}")
+    return False
+
+
+def github_get_user_email_by_username(gh, username: str) -> str:
+    """
+    Get a user's email by their GitHub username.
+
+    Args:
+        gh: Authenticated GitHub client
+        username: GitHub username
+
+    Returns:
+        User's email address or empty string if not found
+    """
+    try:
+        user = gh.get_user(username)
+        return user.email or ''
+    except GithubException as e:
+        logger.warning(f"Error fetching user email for {username}: {e}")
+    return ''
+
+
+def github_export_branch_to_archive(
+    gh,
+    repo_name: str,
+    branch_name: str,
+    archive_folder: str,
+    project_name: str
+) -> Optional[str]:
+    """
+    Export a specific branch from a GitHub repo to a local archive file.
+
+    Args:
+        gh: Authenticated GitHub client
+        repo_name: Repository name in "owner/repo" format
+        branch_name: Name of the branch to export
+        archive_folder: Local folder to store the archive
+        project_name: Name of the project (for archive naming)
+
+    Returns:
+        Path to the created archive file, or None if export failed
+    """
+    try:
+        repo = gh.get_repo(repo_name)
+
+        os.makedirs(archive_folder, exist_ok=True)
+
+        timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        safe_project_name = "".join(
+            c if c.isalnum() or c in '-_' else '_' for c in project_name
+        )
+        safe_branch_name = "".join(
+            c if c.isalnum() or c in '-_' else '_' for c in branch_name
+        )
+        archive_filename = f"{safe_project_name}_{safe_branch_name}_{timestamp}.tar.gz"
+        archive_path = os.path.join(archive_folder, archive_filename)
+
+        logger.info(
+            f"Exporting branch '{branch_name}' from repo '{repo_name}' "
+            f"to {archive_path}"
+        )
+
+        archive_url = repo.get_archive_link('tarball', ref=branch_name)
+
+        import urllib.request
+        urllib.request.urlretrieve(archive_url, archive_path)
+
+        logger.info(f"Successfully exported branch to {archive_path}")
+        return archive_path
+
+    except GithubException as e:
+        logger.error(f"GitHub error exporting branch '{branch_name}': {e}")
+        return None
+    except OSError as e:
+        logger.error(f"File system error exporting branch '{branch_name}': {e}")
+        return None
+
+
+def github_close_merge_request(
+    gh,
+    repo_name: str,
+    pr_number: int,
+    dry_run: bool = False
+) -> bool:
+    """
+    Close a pull request on GitHub.
+
+    Args:
+        gh: Authenticated GitHub client
+        repo_name: Repository name in "owner/repo" format
+        pr_number: Pull request number
+        dry_run: If True, don't actually close the PR
+
+    Returns:
+        True if PR was closed successfully, False otherwise
+    """
+    try:
+        repo = gh.get_repo(repo_name)
+        pr = repo.get_pull(pr_number)
+
+        if dry_run:
+            logger.info(f"[DRY RUN] Would close PR #{pr_number} in repo {repo_name}")
+            return True
+
+        pr.create_issue_comment(
+            "🤖 This pull request has been automatically closed by the "
+            "repository maintenance bot due to prolonged inactivity. "
+            "The source branch has been archived and will be deleted. "
+            "If this work is still needed, please create a new branch "
+            "and pull request."
+        )
+        pr.edit(state='closed')
+
+        logger.info(f"Successfully closed PR #{pr_number} in repo {repo_name}")
+        return True
+
+    except GithubException as e:
+        logger.error(f"Error closing PR #{pr_number} in repo {repo_name}: {e}")
+        return False
+
+
+def github_delete_branch(
+    gh,
+    repo_name: str,
+    branch_name: str,
+    dry_run: bool = False
+) -> bool:
+    """
+    Delete a branch from a GitHub repository.
+
+    Args:
+        gh: Authenticated GitHub client
+        repo_name: Repository name in "owner/repo" format
+        branch_name: Name of the branch to delete
+        dry_run: If True, don't actually delete the branch
+
+    Returns:
+        True if branch was deleted successfully, False otherwise
+    """
+    try:
+        repo = gh.get_repo(repo_name)
+
+        if dry_run:
+            logger.info(
+                f"[DRY RUN] Would delete branch '{branch_name}' from repo {repo_name}"
+            )
+            return True
+
+        ref = repo.get_git_ref(f"heads/{branch_name}")
+        ref.delete()
+        logger.info(
+            f"Successfully deleted branch '{branch_name}' from repo {repo_name}"
+        )
+        return True
+
+    except GithubException as e:
+        logger.error(
+            f"Error deleting branch '{branch_name}' from repo {repo_name}: {e}"
+        )
+        return False
+
+
+def github_post_mr_reminder_comment(
+    gh,
+    repo_name: str,
+    pr_number: int,
+    comment_text: str,
+    dry_run: bool = False
+) -> bool:
+    """
+    Post a reminder comment to a GitHub pull request.
+
+    Args:
+        gh: Authenticated GitHub client
+        repo_name: Repository name in "owner/repo" format
+        pr_number: Pull request number
+        comment_text: Text of the comment to post
+        dry_run: If True, don't actually post the comment
+
+    Returns:
+        True if comment was posted successfully, False otherwise
+    """
+    try:
+        repo = gh.get_repo(repo_name)
+        pr = repo.get_pull(pr_number)
+
+        if dry_run:
+            logger.info(f"[DRY RUN] Would post reminder comment to PR #{pr_number} in repo {repo_name}")
+            logger.debug(f"Comment text: {comment_text[:100]}...")
+            return True
+
+        pr.create_issue_comment(comment_text)
+        logger.info(f"Posted reminder comment to PR #{pr_number} in repo {repo_name}")
+        return True
+
+    except GithubException as e:
+        logger.error(f"Error posting comment to PR #{pr_number} in repo {repo_name}: {e}")
+        return False
+
+
+# =============================================================================
+# GitHub-aware Collection/Processing Functions
+# =============================================================================
+
+
+def github_get_notification_email(gh, committer_email: str, fallback_email: str) -> str:
+    """
+    Get the email address to use for notifications on GitHub.
+
+    Args:
+        gh: Authenticated GitHub client
+        committer_email: Original committer's email
+        fallback_email: Fallback email if user is inactive
+
+    Returns:
+        Email address to use for notification
+    """
+    if github_is_user_active(gh, committer_email):
+        return committer_email
+    logger.info(f"User {committer_email} is not active, using fallback email")
+    return fallback_email
+
+
+def github_get_mr_notification_email(gh, mr_info: dict, fallback_email: str) -> str:
+    """
+    Get the email address to use for PR notifications on GitHub.
+
+    Follows the priority: Assignee → Author → Default (fallback).
+
+    Args:
+        gh: Authenticated GitHub client
+        mr_info: Dictionary with PR information
+        fallback_email: Fallback email if no active user is found
+
+    Returns:
+        Email address to use for notification
+    """
+    assignee_email = mr_info.get('assignee_email', '')
+    if not assignee_email:
+        assignee_username = mr_info.get('assignee_username', '')
+        if assignee_username:
+            assignee_email = github_get_user_email_by_username(gh, assignee_username)
+
+    if assignee_email and github_is_user_active(gh, assignee_email):
+        return assignee_email
+
+    if assignee_email:
+        logger.info(f"PR assignee {assignee_email} is not active, trying author")
+
+    author_email = mr_info.get('author_email', '')
+    if not author_email:
+        author_username = mr_info.get('author_username', '')
+        if author_username:
+            author_email = github_get_user_email_by_username(gh, author_username)
+
+    if author_email and github_is_user_active(gh, author_email):
+        return author_email
+
+    if author_email:
+        logger.info(f"PR author {author_email} is not active, using fallback email")
+
+    return fallback_email
+
+
+def _github_process_project_stale_items(
+    gh,
+    repo_name: str,
+    stale_days: int,
+    fallback_email: str
+) -> tuple:
+    """
+    Process a single GitHub repo to collect stale items.
+
+    Args:
+        gh: Authenticated GitHub client
+        repo_name: Repository name in "owner/repo" format
+        stale_days: Number of days for stale threshold
+        fallback_email: Fallback email for notifications
+
+    Returns:
+        Tuple of (email_to_items, skipped_items, branches_with_prs)
+    """
+    email_to_items = {}
+    skipped_items = []
+    branches_with_prs = set()
+
+    try:
+        repo = gh.get_repo(repo_name)
+
+        # First, get all stale PRs directly
+        stale_prs = github_get_stale_pull_requests(gh, repo_name, stale_days)
+
+        for pr_info in stale_prs:
+            branch_key = (repo_name, pr_info['branch_name'])
+            branches_with_prs.add(branch_key)
+
+            notification_email = github_get_mr_notification_email(gh, pr_info, fallback_email)
+
+            if notification_email:
+                if notification_email not in email_to_items:
+                    email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
+                email_to_items[notification_email]['merge_requests'].append(pr_info)
+            else:
+                skipped_items.append({'type': 'pull_request', 'info': pr_info})
+                logger.warning(
+                    f"No notification email available for pull request "
+                    f"#{pr_info['iid']} in repo '{pr_info['project_name']}'. "
+                    f"Configure 'fallback_email' to avoid missing notifications."
+                )
+
+        # Next, get stale branches that don't have PRs
+        branches = github_get_stale_branches(gh, repo_name, stale_days)
+
+        for branch in branches:
+            branch_key = (repo_name, branch['branch_name'])
+
+            if branch_key in branches_with_prs:
+                logger.debug(
+                    f"Skipping branch '{branch['branch_name']}' - already has stale PR"
+                )
+                continue
+
+            pr_info = github_get_merge_request_for_branch(repo, branch['branch_name'])
+            if pr_info:
+                logger.debug(
+                    f"Skipping branch '{branch['branch_name']}' - has active PR #{pr_info['iid']}"
+                )
+                continue
+
+            committer_email = branch.get('committer_email') or branch.get('author_email', '')
+            if not committer_email:
+                notification_email = fallback_email
+            else:
+                notification_email = github_get_notification_email(gh, committer_email, fallback_email)
+
+            if notification_email:
+                if notification_email not in email_to_items:
+                    email_to_items[notification_email] = {'branches': [], 'merge_requests': []}
+                email_to_items[notification_email]['branches'].append(branch)
+            else:
+                skipped_items.append({'type': 'branch', 'info': branch})
+                logger.warning(
+                    f"No notification email available for stale branch "
+                    f"'{branch['branch_name']}' in repo '{branch['project_name']}'. "
+                    f"Original committer: {committer_email or 'unknown'}. "
+                    f"Configure 'fallback_email' to avoid missing notifications."
+                )
+
+    except GithubException as e:
+        logger.error(f"Failed to get repo {repo_name}: {e}")
+
+    return email_to_items, skipped_items, branches_with_prs
+
+
+def github_collect_stale_items_by_email(gh, config: dict) -> dict:
+    """
+    Collect stale branches and PRs from configured GitHub repos and group by email.
+
+    Args:
+        gh: Authenticated GitHub client
+        config: Configuration dictionary
+
+    Returns:
+        Dictionary mapping email addresses to dicts with 'branches' and 'merge_requests' lists
+    """
+    stale_days = config.get('stale_days', 30)
+    fallback_email = config.get('fallback_email', '')
+    repo_names = config.get('projects', [])
+    max_workers = get_validated_max_workers(config)
+
+    email_to_items = {}
+    all_skipped_items = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_repo = {
+            executor.submit(
+                _github_process_project_stale_items,
+                gh, repo_name, stale_days, fallback_email
+            ): repo_name
+            for repo_name in repo_names
+        }
+
+        for future in as_completed(future_to_repo):
+            repo_name = future_to_repo[future]
+            try:
+                repo_email_items, repo_skipped, _ = future.result()
+
+                for email, items in repo_email_items.items():
+                    if email not in email_to_items:
+                        email_to_items[email] = {'branches': [], 'merge_requests': []}
+                    email_to_items[email]['branches'].extend(items['branches'])
+                    email_to_items[email]['merge_requests'].extend(items['merge_requests'])
+
+                all_skipped_items.extend(repo_skipped)
+
+            except Exception as e:
+                logger.error(f"Error processing repo {repo_name}: {e}")
+
+    if all_skipped_items:
+        logger.warning(
+            f"Total of {len(all_skipped_items)} stale item(s) skipped due to "
+            f"missing notification email. Configure 'fallback_email' to receive notifications."
+        )
+
+    return email_to_items
+
+
+def _github_process_project_mr_comments(
+    gh,
+    repo_name: str,
+    inactivity_days: int,
+    frequency_days: int,
+    db_path: str,
+    comments: list,
+    config: dict,
+    dry_run: bool = False
+) -> dict:
+    """
+    Process stale PR comments for a single GitHub repo.
+
+    Args:
+        gh: Authenticated GitHub client
+        repo_name: Repository name in "owner/repo" format
+        inactivity_days: Days of inactivity threshold
+        frequency_days: Days between comments
+        db_path: Path to database
+        comments: List of comment texts
+        config: Configuration dictionary
+        dry_run: If True, don't actually post comments
+
+    Returns:
+        Summary dict for this repo
+    """
+    summary = {
+        'comments_posted': 0,
+        'comments_skipped': 0,
+        'comments_failed': 0,
+        'commented_mrs': []
+    }
+
+    try:
+        stale_prs = github_get_stale_pull_requests(gh, repo_name, inactivity_days)
+
+        for pr_info in stale_prs:
+            pr_number = pr_info['iid']
+            pr_last_activity = pr_info.get('updated_at')
+
+            if not should_post_mr_comment(
+                db_path, repo_name, pr_number, pr_last_activity, inactivity_days, frequency_days
+            ):
+                summary['comments_skipped'] += 1
+                logger.debug(
+                    f"Skipping comment for PR #{pr_number} in repo {repo_name} - "
+                    f"already commented recently"
+                )
+                continue
+
+            comment_index = get_next_comment_index(db_path, repo_name, pr_number, config)
+            comment_text = comments[comment_index]
+
+            if github_post_mr_reminder_comment(gh, repo_name, pr_number, comment_text, dry_run=dry_run):
+                summary['comments_posted'] += 1
+                summary['commented_mrs'].append({
+                    'project_id': repo_name,
+                    'project_name': pr_info.get('project_name', 'Unknown'),
+                    'mr_iid': pr_number,
+                    'mr_title': pr_info.get('title', 'Unknown'),
+                })
+                if not dry_run:
+                    record_mr_comment(db_path, repo_name, pr_number, comment_index)
+            else:
+                summary['comments_failed'] += 1
+
+    except GithubException as e:
+        logger.error(f"Failed to get repo {repo_name}: {e}")
+
+    return summary
+
+
+def github_process_stale_mr_comments(
+    gh,
+    config: dict,
+    dry_run: bool = False
+) -> dict:
+    """
+    Process stale PRs on GitHub and post reminder comments where appropriate.
+
+    Args:
+        gh: Authenticated GitHub client
+        config: Configuration dictionary
+        dry_run: If True, don't actually post comments
+
+    Returns:
+        Summary of comment operations
+    """
+    inactivity_days = config.get('mr_comment_inactivity_days', DEFAULT_MR_COMMENT_INACTIVITY_DAYS)
+    frequency_days = config.get('mr_comment_frequency_days', DEFAULT_MR_COMMENT_FREQUENCY_DAYS)
+    db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
+    repo_names = config.get('projects', [])
+    max_workers = get_validated_max_workers(config)
+
+    comments = get_mr_reminder_comments(config)
+
+    combined_summary = {
+        'comments_posted': 0,
+        'comments_skipped': 0,
+        'comments_failed': 0,
+        'commented_mrs': []
+    }
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_repo = {
+            executor.submit(
+                _github_process_project_mr_comments,
+                gh, repo_name, inactivity_days, frequency_days,
+                db_path, comments, config, dry_run
+            ): repo_name
+            for repo_name in repo_names
+        }
+
+        for future in as_completed(future_to_repo):
+            repo_name = future_to_repo[future]
+            try:
+                repo_summary = future.result()
+                combined_summary['comments_posted'] += repo_summary['comments_posted']
+                combined_summary['comments_skipped'] += repo_summary['comments_skipped']
+                combined_summary['comments_failed'] += repo_summary['comments_failed']
+                combined_summary['commented_mrs'].extend(repo_summary['commented_mrs'])
+            except Exception as e:
+                logger.error(f"Error processing PR comments for repo {repo_name}: {e}")
+
+    return combined_summary
+
+
+def _github_process_project_for_archiving(
+    gh,
+    repo_name: str,
+    stale_days: int,
+    cleanup_weeks: int
+) -> tuple:
+    """
+    Process a single GitHub repo to find items ready for archiving.
+
+    Args:
+        gh: Authenticated GitHub client
+        repo_name: Repository name in "owner/repo" format
+        stale_days: Number of days for stale threshold
+        cleanup_weeks: Number of weeks for cleanup threshold
+
+    Returns:
+        Tuple of (branches_to_archive, prs_to_archive)
+    """
+    branches_to_archive = []
+    prs_to_archive = []
+    branches_with_prs = set()
+
+    try:
+        repo = gh.get_repo(repo_name)
+
+        stale_prs = github_get_stale_pull_requests(gh, repo_name, stale_days)
+
+        for pr_info in stale_prs:
+            branch_key = (repo_name, pr_info['branch_name'])
+            branches_with_prs.add(branch_key)
+
+            last_activity = pr_info.get('updated_at')
+            if is_ready_for_archiving(last_activity, stale_days, cleanup_weeks):
+                prs_to_archive.append(pr_info)
+                logger.debug(
+                    f"PR #{pr_info['iid']} in '{pr_info['project_name']}' "
+                    f"is ready for archiving"
+                )
+
+        stale_branches = github_get_stale_branches(gh, repo_name, stale_days)
+
+        for branch in stale_branches:
+            branch_key = (repo_name, branch['branch_name'])
+
+            if branch_key in branches_with_prs:
+                continue
+
+            pr_info = github_get_merge_request_for_branch(repo, branch['branch_name'])
+            if pr_info:
+                continue
+
+            try:
+                commit_date = parse_commit_date(
+                    branch['last_commit_date'].replace(' ', 'T') + '+00:00'
+                )
+            except ValueError:
+                logger.warning(
+                    f"Could not parse date for branch '{branch['branch_name']}', skipping"
+                )
+                continue
+
+            if is_ready_for_archiving(commit_date, stale_days, cleanup_weeks):
+                branches_to_archive.append(branch)
+                logger.debug(
+                    f"Branch '{branch['branch_name']}' in '{branch['project_name']}' "
+                    f"is ready for archiving"
+                )
+
+    except GithubException as e:
+        logger.error(f"Failed to get repo {repo_name}: {e}")
+
+    return branches_to_archive, prs_to_archive
+
+
+def github_perform_automatic_archiving(config: dict, dry_run: bool = False) -> dict:
+    """
+    Perform automatic archiving of stale branches and PRs on GitHub.
+
+    Args:
+        config: Configuration dictionary
+        dry_run: If True, don't actually archive/close/delete
+
+    Returns:
+        Summary of archiving operations
+    """
+    gh = create_github_client(config)
+
+    archive_folder = config.get('archive_folder', DEFAULT_ARCHIVE_FOLDER)
+    stale_days = config.get('stale_days', 30)
+    cleanup_weeks = config.get('cleanup_weeks', 4)
+    repo_names = config.get('projects', [])
+    max_workers = get_validated_max_workers(config)
+
+    summary = {
+        'branches_archived': 0,
+        'branches_failed': 0,
+        'mrs_archived': 0,
+        'mrs_failed': 0,
+        'archived_items': [],
+        'failed_items': [],
+        'stale_days': stale_days,
+        'cleanup_weeks': cleanup_weeks,
+        'total_days': stale_days + (cleanup_weeks * 7),
+    }
+
+    all_branches_to_archive = []
+    all_prs_to_archive = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_repo = {
+            executor.submit(
+                _github_process_project_for_archiving,
+                gh, repo_name, stale_days, cleanup_weeks
+            ): repo_name
+            for repo_name in repo_names
+        }
+
+        for future in as_completed(future_to_repo):
+            repo_name = future_to_repo[future]
+            try:
+                branches, prs = future.result()
+                all_branches_to_archive.extend(branches)
+                all_prs_to_archive.extend(prs)
+            except Exception as e:
+                logger.error(f"Error processing repo {repo_name} for archiving: {e}")
+
+    logger.info(
+        f"Found {len(all_branches_to_archive)} branches and {len(all_prs_to_archive)} PRs "
+        f"ready for archiving (older than {summary['total_days']} days)"
+    )
+
+    # Archive PRs first
+    for pr_info in all_prs_to_archive:
+        repo_name = pr_info['project_id']
+        branch_name = pr_info['branch_name']
+        pr_number = pr_info['iid']
+        project_name = pr_info['project_name']
+
+        # Step 1: Export branch
+        archived = False
+        archive_path = None
+        if dry_run:
+            logger.info(
+                f"[DRY RUN] Would export branch '{branch_name}' from '{project_name}' "
+                f"to {archive_folder}"
+            )
+            archive_path = f"{archive_folder}/{project_name}_{branch_name}_<timestamp>.tar.gz"
+            archived = True
+        else:
+            archive_path = github_export_branch_to_archive(
+                gh, repo_name, branch_name, archive_folder, project_name
+            )
+            if archive_path:
+                archived = True
+            else:
+                summary['mrs_failed'] += 1
+                summary['failed_items'].append({
+                    'type': 'merge_request',
+                    'project': project_name,
+                    'branch': branch_name,
+                    'mr_iid': pr_number,
+                    'error': "Failed to export branch - aborting"
+                })
+                continue
+
+        # Step 2: Close PR
+        mr_closed = github_close_merge_request(gh, repo_name, pr_number, dry_run=dry_run)
+
+        # Step 3: Delete branch
+        deleted = github_delete_branch(gh, repo_name, branch_name, dry_run=dry_run)
+
+        if archived and mr_closed and deleted:
+            summary['mrs_archived'] += 1
+            summary['archived_items'].append({
+                'type': 'merge_request',
+                'project': project_name,
+                'branch': branch_name,
+                'mr_iid': pr_number,
+                'archive_path': archive_path
+            })
+        else:
+            summary['mrs_failed'] += 1
+            summary['failed_items'].append({
+                'type': 'merge_request',
+                'project': project_name,
+                'branch': branch_name,
+                'mr_iid': pr_number,
+                'error': "Partial failure during archiving"
+            })
+
+    # Archive branches without PRs
+    for branch in all_branches_to_archive:
+        repo_name = branch['project_id']
+        branch_name = branch['branch_name']
+        project_name = branch['project_name']
+
+        archived = False
+        archive_path = None
+        if dry_run:
+            logger.info(
+                f"[DRY RUN] Would export branch '{branch_name}' from '{project_name}' "
+                f"to {archive_folder}"
+            )
+            archive_path = f"{archive_folder}/{project_name}_{branch_name}_<timestamp>.tar.gz"
+            archived = True
+        else:
+            archive_path = github_export_branch_to_archive(
+                gh, repo_name, branch_name, archive_folder, project_name
+            )
+            if archive_path:
+                archived = True
+            else:
+                summary['branches_failed'] += 1
+                summary['failed_items'].append({
+                    'type': 'branch',
+                    'project': project_name,
+                    'branch': branch_name,
+                    'error': "Failed to export branch - aborting"
+                })
+                continue
+
+        deleted = github_delete_branch(gh, repo_name, branch_name, dry_run=dry_run)
+
+        if archived and deleted:
+            summary['branches_archived'] += 1
+            summary['archived_items'].append({
+                'type': 'branch',
+                'project': project_name,
+                'branch': branch_name,
+                'archive_path': archive_path
+            })
+        else:
+            summary['branches_failed'] += 1
+            summary['failed_items'].append({
+                'type': 'branch',
+                'project': project_name,
+                'branch': branch_name,
+                'error': "Branch was archived but could not be deleted"
+            })
+
+    return summary
+
+
+# =============================================================================
+# End of GitHub Platform Functions
+# =============================================================================
+
+
 def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
     """
     Main function to collect stale branches/MRs and send notifications.
 
+    Supports both GitLab and GitHub platforms based on config.
     Notifications are throttled based on the notification_frequency_days config.
     A notification is sent if:
     1. There are new items that have never been notified about, OR
@@ -2338,8 +3440,13 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
     Returns:
         Summary of notifications sent
     """
-    gl = create_gitlab_client(config)
-    email_to_items = collect_stale_items_by_email(gl, config)
+    platform = config.get('platform', 'gitlab')
+    if platform == 'github':
+        gh = create_github_client(config)
+        email_to_items = github_collect_stale_items_by_email(gh, config)
+    else:
+        gl = create_gitlab_client(config)
+        email_to_items = collect_stale_items_by_email(gl, config)
 
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
@@ -2412,8 +3519,9 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
 def main() -> Optional[int]:
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(
-        description='Notify GitLab users about stale branches and merge requests, '
-                    'and optionally perform automatic archiving of very old items.'
+        description='Notify users about stale branches and merge/pull requests, '
+                    'and optionally perform automatic archiving of very old items. '
+                    'Supports both GitLab and GitHub platforms.'
     )
     parser.add_argument(
         '-c', '--config',
@@ -2471,16 +3579,21 @@ def main() -> Optional[int]:
     if summary['recipients']:
         logger.info(f"Recipients: {', '.join(summary['recipients'])}")
 
-    # Run MR commenting if enabled
+    # Run MR/PR commenting if enabled
     if config.get('enable_mr_comments', DEFAULT_ENABLE_MR_COMMENTS):
         logger.info("")
         logger.info("=" * 50)
-        logger.info("MR Reminder Comments")
+        logger.info("MR/PR Reminder Comments")
         logger.info("=" * 50)
 
-        # Create GitLab client for comment posting
-        gl = create_gitlab_client(config)
-        comment_summary = process_stale_mr_comments(gl, config, dry_run=args.dry_run)
+        platform = config.get('platform', 'gitlab')
+        if platform == 'github':
+            gh = create_github_client(config)
+            comment_summary = github_process_stale_mr_comments(gh, config, dry_run=args.dry_run)
+        else:
+            # Create GitLab client for comment posting
+            gl = create_gitlab_client(config)
+            comment_summary = process_stale_mr_comments(gl, config, dry_run=args.dry_run)
 
         inactivity_days = config.get('mr_comment_inactivity_days', DEFAULT_MR_COMMENT_INACTIVITY_DAYS)
         frequency_days = config.get('mr_comment_frequency_days', DEFAULT_MR_COMMENT_FREQUENCY_DAYS)
@@ -2503,7 +3616,10 @@ def main() -> Optional[int]:
         logger.info("Automatic Archiving")
         logger.info("=" * 50)
 
-        archive_summary = perform_automatic_archiving(config, dry_run=args.dry_run)
+        if config.get('platform', 'gitlab') == 'github':
+            archive_summary = github_perform_automatic_archiving(config, dry_run=args.dry_run)
+        else:
+            archive_summary = perform_automatic_archiving(config, dry_run=args.dry_run)
 
         logger.info(f"Items older than: {archive_summary['total_days']} days "
                     f"({archive_summary['stale_days']} stale + "
