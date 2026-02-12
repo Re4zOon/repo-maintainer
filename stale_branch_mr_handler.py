@@ -26,6 +26,7 @@ import os
 import random
 import smtplib
 import sqlite3
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -37,7 +38,6 @@ import yaml
 from jinja2 import Template
 
 try:
-    import github as github_module
     from github import Github, GithubException
     HAS_GITHUB = True
 except ImportError:
@@ -2705,7 +2705,6 @@ def github_export_branch_to_archive(
 
         archive_url = repo.get_archive_link('tarball', ref=branch_name)
 
-        import urllib.request
         urllib.request.urlretrieve(archive_url, archive_path)
 
         logger.info(f"Successfully exported branch to {archive_path}")

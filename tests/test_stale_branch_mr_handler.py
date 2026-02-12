@@ -2812,8 +2812,7 @@ class TestValidateConfigGitHub(unittest.TestCase):
 class TestGitHubGetStaleBranches(unittest.TestCase):
     """Tests for github_get_stale_branches function."""
 
-    @patch('stale_branch_mr_handler.Github')
-    def test_identifies_stale_branch(self, mock_github_cls):
+    def test_identifies_stale_branch(self):
         """Test that old branches are identified as stale on GitHub."""
         mock_gh = MagicMock()
 
@@ -2840,8 +2839,7 @@ class TestGitHubGetStaleBranches(unittest.TestCase):
         self.assertEqual(result[0]['branch_name'], 'stale-feature')
         self.assertEqual(result[0]['project_id'], 'owner/Test-Repo')
 
-    @patch('stale_branch_mr_handler.Github')
-    def test_ignores_recent_branch(self, mock_github_cls):
+    def test_ignores_recent_branch(self):
         """Test that recent branches are not marked as stale on GitHub."""
         mock_gh = MagicMock()
 
@@ -2866,8 +2864,7 @@ class TestGitHubGetStaleBranches(unittest.TestCase):
 
         self.assertEqual(len(result), 0)
 
-    @patch('stale_branch_mr_handler.Github')
-    def test_ignores_protected_branch(self, mock_github_cls):
+    def test_ignores_protected_branch(self):
         """Test that protected branches are ignored on GitHub."""
         mock_gh = MagicMock()
 
@@ -2896,8 +2893,7 @@ class TestGitHubGetStaleBranches(unittest.TestCase):
 class TestGitHubGetStalePullRequests(unittest.TestCase):
     """Tests for github_get_stale_pull_requests function."""
 
-    @patch('stale_branch_mr_handler.Github')
-    def test_identifies_stale_pr(self, mock_github_cls):
+    def test_identifies_stale_pr(self):
         """Test that old PRs are identified as stale."""
         mock_gh = MagicMock()
 
@@ -2928,8 +2924,7 @@ class TestGitHubGetStalePullRequests(unittest.TestCase):
         self.assertEqual(result[0]['iid'], 42)
         self.assertEqual(result[0]['title'], 'Fix feature')
 
-    @patch('stale_branch_mr_handler.Github')
-    def test_ignores_recent_pr(self, mock_github_cls):
+    def test_ignores_recent_pr(self):
         """Test that recent PRs are not marked as stale."""
         mock_gh = MagicMock()
 
