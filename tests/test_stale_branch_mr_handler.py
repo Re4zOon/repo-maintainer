@@ -2808,6 +2808,17 @@ class TestValidateConfigGitHub(unittest.TestCase):
         # Should not raise
         stale_branch_mr_handler.validate_config(config)
 
+    def test_unknown_platform_raises_error(self):
+        """Test that an unknown platform value raises ConfigurationError."""
+        config = {
+            'platform': 'gihub',  # typo
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': ['octocat/Hello-World'],
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_mr_handler.validate_config(config)
+        self.assertIn('gihub', str(ctx.exception))
+
 
 class TestGitHubGetStaleBranches(unittest.TestCase):
     """Tests for github_get_stale_branches function."""
@@ -3175,7 +3186,6 @@ class TestGitHubCollectStaleItemsByEmail(unittest.TestCase):
     def test_groups_by_email(self, mock_get_email, mock_get_mr_email, mock_get_mr, mock_get_stale_prs, mock_get_branches):
         """Test that GitHub items are grouped by email correctly."""
         mock_gh = MagicMock()
-        old_date = datetime.now(timezone.utc) - timedelta(days=60)
 
         mock_get_stale_prs.return_value = []
         mock_get_branches.return_value = [

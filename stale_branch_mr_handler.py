@@ -26,7 +26,6 @@ import os
 import random
 import smtplib
 import sqlite3
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -1043,6 +1042,11 @@ def validate_config(config: dict) -> None:
 
     platform = config.get('platform', 'gitlab')
 
+    if platform not in ('gitlab', 'github'):
+        raise ConfigurationError(
+            f"Unsupported platform: '{platform}'. Must be 'gitlab' or 'github'."
+        )
+
     if platform == 'github':
         if not HAS_GITHUB:
             raise ConfigurationError(
@@ -1056,7 +1060,7 @@ def validate_config(config: dict) -> None:
             if key not in config['github']:
                 raise ConfigurationError(f"Missing required GitHub config key: '{key}'")
     else:
-        # Default: GitLab
+        # GitLab
         required_gitlab_keys = ['url', 'private_token']
         if 'gitlab' not in config:
             raise ConfigurationError("Missing 'gitlab' section in configuration")
@@ -1118,12 +1122,17 @@ def create_github_client(config: dict):
         )
     token = config['github']['token']
     api_url = config['github'].get('api_url')
-    if api_url:
-        gh = Github(login_or_token=token, base_url=api_url)
-    else:
-        gh = Github(login_or_token=token)
-    # Verify authentication by fetching the authenticated user
-    gh.get_user().login
+    try:
+        if api_url:
+            gh = Github(login_or_token=token, base_url=api_url)
+        else:
+            gh = Github(login_or_token=token)
+        # Verify authentication by fetching the authenticated user
+        gh.get_user().login
+    except GithubException as e:
+        raise ConfigurationError(
+            f"Failed to authenticate with GitHub: {e.data.get('message', str(e)) if hasattr(e, 'data') and e.data else str(e)}"
+        ) from e
     return gh
 
 
@@ -2419,18 +2428,8 @@ def github_get_stale_branches(gh, repo_name: str, stale_days: int) -> list:
     stale_branches = []
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=stale_days)
 
-    # Get protected branches
-    try:
-        protected_branches = set()
-        for branch in repo.get_branches():
-            if branch.protected:
-                protected_branches.add(branch.name)
-    except GithubException as e:
-        logger.warning(f"Error fetching branch protection info for {repo_name}: {e}")
-        protected_branches = set()
-
     for branch in repo.get_branches():
-        if branch.name in protected_branches:
+        if getattr(branch, 'protected', False):
             logger.debug(f"Skipping protected branch: {branch.name}")
             continue
 
@@ -2453,8 +2452,11 @@ def github_get_stale_branches(gh, repo_name: str, stale_days: int) -> list:
                 author_name = commit.commit.author.name or 'Unknown'
                 author_email = commit.commit.author.email or ''
                 committer_email = commit.commit.committer.email or ''
-            except AttributeError:
-                pass
+            except AttributeError as e:
+                # Some commits may lack complete author/committer information; use defaults.
+                logger.debug(
+                    f"Could not get full author/committer info for branch {branch.name}: {e}"
+                )
 
             stale_branches.append({
                 'project_id': repo_name,
@@ -2487,24 +2489,23 @@ def github_get_pr_last_activity_date(pr) -> Optional[datetime]:
             if updated_at.tzinfo is None:
                 updated_at = updated_at.replace(tzinfo=timezone.utc)
             last_activity = updated_at
-    except (AttributeError, TypeError):
-        pass
+    except (AttributeError, TypeError) as e:
+        # Treat missing or invalid 'updated_at' as unknown activity, but log for diagnostics
+        logger.debug(f"Could not determine 'updated_at' for PR #{getattr(pr, 'number', 'unknown')}: {e}")
 
     # Check comments for more recent activity
     try:
-        comments = pr.get_issue_comments()
-        if comments.totalCount > 0:
-            # Get the last comment
-            last_comment = None
-            for comment in comments:
-                last_comment = comment
-            if last_comment:
-                comment_date = last_comment.updated_at or last_comment.created_at
-                if comment_date:
-                    if comment_date.tzinfo is None:
-                        comment_date = comment_date.replace(tzinfo=timezone.utc)
-                    if last_activity is None or comment_date > last_activity:
-                        last_activity = comment_date
+        # Fetch only the most recently updated comment to avoid iterating
+        # through the entire paginated list.
+        comments = pr.get_issue_comments(sort="updated", direction="desc")
+        last_comment = next(iter(comments), None)
+        if last_comment:
+            comment_date = last_comment.updated_at or last_comment.created_at
+            if comment_date:
+                if comment_date.tzinfo is None:
+                    comment_date = comment_date.replace(tzinfo=timezone.utc)
+                if last_activity is None or comment_date > last_activity:
+                    last_activity = comment_date
     except GithubException as e:
         logger.debug(f"Error fetching comments for PR #{pr.number}: {e}")
 
@@ -2703,9 +2704,12 @@ def github_export_branch_to_archive(
             f"to {archive_path}"
         )
 
+        # Use the authenticated PyGithub requester to download the archive
+        # so that private repos are properly handled
         archive_url = repo.get_archive_link('tarball', ref=branch_name)
-
-        urllib.request.urlretrieve(archive_url, archive_path)
+        status, headers, data = repo._requester.requestBlob("GET", archive_url)
+        with open(archive_path, 'wb') as f:
+            f.write(data)
 
         logger.info(f"Successfully exported branch to {archive_path}")
         return archive_path
