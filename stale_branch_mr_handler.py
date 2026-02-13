@@ -1136,22 +1136,6 @@ def create_github_client(config: dict):
     return gh
 
 
-def create_platform_client(config: dict):
-    """
-    Create the appropriate platform client based on configuration.
-
-    Args:
-        config: Configuration dictionary
-
-    Returns:
-        Authenticated platform client (GitLab or GitHub)
-    """
-    platform = config.get('platform', 'gitlab')
-    if platform == 'github':
-        return create_github_client(config)
-    return create_gitlab_client(config)
-
-
 def parse_commit_date(date_str: str) -> datetime:
     """
     Parse a commit date string into a datetime object.
@@ -3495,7 +3479,7 @@ def notify_stale_branches(config: dict, dry_run: bool = False) -> dict:
         if merge_requests and branches:
             subject = f"[Action Required] {total_items} Stale Item(s) Require Attention"
         elif merge_requests:
-            subject = f"[Action Required] {len(merge_requests)} Stale Merge Request(s) Require Attention"
+            subject = f"[Action Required] {len(merge_requests)} Stale Merge/Pull Request(s) Require Attention"
         else:
             subject = f"[Action Required] {len(branches)} Stale Branch(es) Require Attention"
 
@@ -3544,10 +3528,10 @@ def main() -> Optional[int]:
     parser.add_argument(
         '--archive',
         action='store_true',
-        help='Enable automatic archiving of stale branches/MRs that have exceeded '
+        help='Enable automatic archiving of stale branches and merge/pull requests that have exceeded '
              'the cleanup period (stale_days + cleanup_weeks). This will: '
              '1) Export branches to archive folder, '
-             '2) Close associated MRs, '
+             '2) Close associated merge/pull requests, '
              '3) Delete the branches.'
     )
 
@@ -3571,11 +3555,14 @@ def main() -> Optional[int]:
     # Run notification first
     summary = notify_stale_branches(config, dry_run=args.dry_run)
 
+    platform = config.get('platform', 'gitlab')
+    mr_label = "pull requests" if platform == "github" else "merge requests"
+
     logger.info("=" * 50)
-    logger.info("Stale Branch/MR Notification Summary")
+    logger.info("Stale Branch/MR/PR Notification Summary")
     logger.info("=" * 50)
     logger.info(f"Total stale branches found: {summary['total_stale_branches']}")
-    logger.info(f"Total stale merge requests found: {summary.get('total_stale_merge_requests', 0)}")
+    logger.info(f"Total stale {mr_label} found: {summary.get('total_stale_merge_requests', 0)}")
     logger.info(f"Emails sent: {summary['emails_sent']}")
     logger.info(f"Emails skipped (already notified): {summary.get('emails_skipped', 0)}")
     logger.info(f"Emails failed: {summary['emails_failed']}")
@@ -3608,9 +3595,14 @@ def main() -> Optional[int]:
         logger.info(f"Comments failed: {comment_summary['comments_failed']}")
 
         if comment_summary['commented_mrs']:
-            logger.info("MRs commented:")
-            for mr in comment_summary['commented_mrs']:
-                logger.info(f"  - !{mr['mr_iid']} in {mr['project_name']}: {mr['mr_title']}")
+            if platform == 'github':
+                logger.info("PRs commented:")
+                for mr in comment_summary['commented_mrs']:
+                    logger.info(f"  - #{mr['mr_iid']} in {mr['project_name']}: {mr['mr_title']}")
+            else:
+                logger.info("MRs commented:")
+                for mr in comment_summary['commented_mrs']:
+                    logger.info(f"  - !{mr['mr_iid']} in {mr['project_name']}: {mr['mr_title']}")
 
     # Run automatic archiving if enabled
     if args.archive or config.get('enable_auto_archive', DEFAULT_ENABLE_AUTO_ARCHIVE):

@@ -2924,7 +2924,7 @@ class TestGitHubGetStalePullRequests(unittest.TestCase):
         mock_pr.user.name = 'Test User'
         mock_pr.user.email = 'test@example.com'
         mock_pr.assignee = None
-        mock_pr.get_issue_comments.return_value = MagicMock(totalCount=0)
+        mock_pr.get_issue_comments.return_value = []
 
         mock_repo.get_pulls.return_value = [mock_pr]
         mock_gh.get_repo.return_value = mock_repo
@@ -2955,7 +2955,7 @@ class TestGitHubGetStalePullRequests(unittest.TestCase):
         mock_pr.user.name = 'Test User'
         mock_pr.user.email = 'test@example.com'
         mock_pr.assignee = None
-        mock_pr.get_issue_comments.return_value = MagicMock(totalCount=0)
+        mock_pr.get_issue_comments.return_value = []
 
         mock_repo.get_pulls.return_value = [mock_pr]
         mock_gh.get_repo.return_value = mock_repo
@@ -3125,7 +3125,7 @@ class TestGitHubGetMergeRequestForBranch(unittest.TestCase):
         mock_pr.user.name = 'Test User'
         mock_pr.user.email = 'test@example.com'
         mock_pr.assignee = None
-        mock_pr.get_issue_comments.return_value = MagicMock(totalCount=0)
+        mock_pr.get_issue_comments.return_value = []
 
         mock_repo.get_pulls.return_value = [mock_pr]
 
