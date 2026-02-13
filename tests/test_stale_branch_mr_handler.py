@@ -2733,6 +2733,7 @@ class TestParallelProcessing(unittest.TestCase):
 # =============================================================================
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestValidateConfigGitHub(unittest.TestCase):
     """Tests for validate_config with GitHub platform."""
 
@@ -2826,6 +2827,7 @@ class TestValidateConfigGitHub(unittest.TestCase):
         self.assertIn('gihub', str(ctx.exception))
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubGetStaleBranches(unittest.TestCase):
     """Tests for github_get_stale_branches function."""
 
@@ -2907,6 +2909,7 @@ class TestGitHubGetStaleBranches(unittest.TestCase):
         self.assertEqual(len(result), 0)
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubGetStalePullRequests(unittest.TestCase):
     """Tests for github_get_stale_pull_requests function."""
 
@@ -2971,6 +2974,7 @@ class TestGitHubGetStalePullRequests(unittest.TestCase):
         self.assertEqual(len(result), 0)
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubIsUserActive(unittest.TestCase):
     """Tests for github_is_user_active function."""
 
@@ -2994,6 +2998,7 @@ class TestGitHubIsUserActive(unittest.TestCase):
         self.assertFalse(result)
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubGetUserEmailByUsername(unittest.TestCase):
     """Tests for github_get_user_email_by_username function."""
 
@@ -3020,6 +3025,7 @@ class TestGitHubGetUserEmailByUsername(unittest.TestCase):
         self.assertEqual(result, '')
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubPostMrReminderComment(unittest.TestCase):
     """Tests for github_post_mr_reminder_comment function."""
 
@@ -3049,6 +3055,7 @@ class TestGitHubPostMrReminderComment(unittest.TestCase):
         mock_pr.create_issue_comment.assert_called_once_with('Test comment')
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubCloseMergeRequest(unittest.TestCase):
     """Tests for github_close_merge_request function."""
 
@@ -3079,6 +3086,7 @@ class TestGitHubCloseMergeRequest(unittest.TestCase):
         mock_pr.edit.assert_called_once_with(state='closed')
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubDeleteBranch(unittest.TestCase):
     """Tests for github_delete_branch function."""
 
@@ -3109,6 +3117,7 @@ class TestGitHubDeleteBranch(unittest.TestCase):
         mock_ref.delete.assert_called_once()
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubGetMergeRequestForBranch(unittest.TestCase):
     """Tests for github_get_merge_request_for_branch function."""
 
@@ -3153,6 +3162,7 @@ class TestGitHubGetMergeRequestForBranch(unittest.TestCase):
         self.assertIsNone(result)
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubNotificationEmail(unittest.TestCase):
     """Tests for GitHub notification email functions."""
 
@@ -3181,6 +3191,7 @@ class TestGitHubNotificationEmail(unittest.TestCase):
         self.assertEqual(result, 'fallback@example.com')
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubCollectStaleItemsByEmail(unittest.TestCase):
     """Tests for github_collect_stale_items_by_email function."""
 
@@ -3279,6 +3290,7 @@ class TestEmailTemplateIsPlatformAgnostic(unittest.TestCase):
         self.assertIn('Repository Maintenance Team', stale_branch_mr_handler.EMAIL_TEMPLATE)
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubGetPrLastActivityDate(unittest.TestCase):
     """Tests for github_get_pr_last_activity_date function."""
 
@@ -3365,6 +3377,7 @@ class TestGitHubGetPrLastActivityDate(unittest.TestCase):
         self.assertIsNotNone(result.tzinfo)
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubExportBranchToArchive(unittest.TestCase):
     """Tests for github_export_branch_to_archive function."""
 
@@ -3449,6 +3462,7 @@ class TestGitHubExportBranchToArchive(unittest.TestCase):
         self.assertIsNone(result)
 
 
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
     """Tests for github_perform_automatic_archiving function."""
 

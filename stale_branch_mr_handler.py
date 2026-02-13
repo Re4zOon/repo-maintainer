@@ -418,12 +418,13 @@ def init_database(db_path: str) -> None:
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
 
+        # project_id is TEXT to support both GitLab numeric IDs and GitHub "owner/repo" strings
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS notification_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 recipient_email TEXT NOT NULL,
                 item_type TEXT NOT NULL,
-                project_id INTEGER NOT NULL,
+                project_id TEXT NOT NULL,
                 item_key TEXT NOT NULL,
                 first_found_at DATETIME NOT NULL,
                 last_notified_at DATETIME NOT NULL,
@@ -461,7 +462,7 @@ def get_last_notification_date(
     db_path: str,
     recipient_email: str,
     item_type: str,
-    project_id: int,
+    project_id: Union[int, str],
     item_key: str
 ) -> Optional[datetime]:
     """
@@ -471,7 +472,7 @@ def get_last_notification_date(
         db_path: Path to the SQLite database file
         recipient_email: Email address of the recipient
         item_type: Type of item ('branch' or 'merge_request')
-        project_id: GitLab project ID
+        project_id: Project identifier (GitLab numeric ID or GitHub "owner/repo" string)
         item_key: Unique key for the item (branch name or MR iid)
 
     Returns:
@@ -496,7 +497,7 @@ def record_notification(
     db_path: str,
     recipient_email: str,
     item_type: str,
-    project_id: int,
+    project_id: Union[int, str],
     item_key: str,
     notification_time: Optional[datetime] = None
 ) -> None:
@@ -510,7 +511,7 @@ def record_notification(
         db_path: Path to the SQLite database file
         recipient_email: Email address of the recipient
         item_type: Type of item ('branch' or 'merge_request')
-        project_id: GitLab project ID
+        project_id: Project identifier (GitLab numeric ID or GitHub "owner/repo" string)
         item_key: Unique key for the item (branch name or MR iid)
         notification_time: Time of notification (defaults to now)
     """
@@ -3011,6 +3012,9 @@ def github_collect_stale_items_by_email(gh, config: dict) -> dict:
     email_to_items = {}
     all_skipped_items = []
 
+    # Note: PyGithub uses the requests library which is generally thread-safe for read operations.
+    # The shared GitHub client (gh) is used across threads for API calls.
+    # If you encounter issues, consider reducing max_workers.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_repo = {
             executor.submit(
@@ -3148,6 +3152,9 @@ def github_process_stale_mr_comments(
         'commented_mrs': []
     }
 
+    # Note: PyGithub uses the requests library which is generally thread-safe for read operations.
+    # The shared GitHub client (gh) is used across threads for API calls.
+    # If you encounter issues, consider reducing max_workers.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_repo = {
             executor.submit(
@@ -3280,6 +3287,9 @@ def github_perform_automatic_archiving(config: dict, dry_run: bool = False) -> d
     all_branches_to_archive = []
     all_prs_to_archive = []
 
+    # Note: PyGithub uses the requests library which is generally thread-safe for read operations.
+    # The shared GitHub client (gh) is used across threads for API calls.
+    # If you encounter issues, consider reducing max_workers.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_repo = {
             executor.submit(
