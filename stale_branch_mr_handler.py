@@ -814,6 +814,7 @@ def get_next_comment_index(
         db_path: Path to the SQLite database file
         project_id: Project identifier (GitLab numeric ID or GitHub "owner/repo" string)
         mr_iid: Merge request internal ID
+        config: Optional configuration dictionary
 
     Returns:
         Index of the next comment to use
@@ -2694,7 +2695,7 @@ def github_export_branch_to_archive(
         status, headers, data = repo._requester.requestBlob("GET", archive_url)
 
         # Validate HTTP status before writing anything to disk
-        if status not in (200, 201, 202, 204, 302):
+        if status not in (200, 201, 202, 204):
             logger.error(
                 f"Failed to export branch '{branch_name}' from '{repo_name}': "
                 f"unexpected HTTP status {status}"
