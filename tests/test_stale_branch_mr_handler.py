@@ -11,6 +11,12 @@ import gitlab
 import stale_branch_mr_handler
 from stale_branch_mr_handler import ConfigurationError
 
+try:
+    from github import GithubException
+    HAS_GITHUB = True
+except ImportError:
+    HAS_GITHUB = False
+
 
 class TestValidateConfig(unittest.TestCase):
     """Tests for validate_config function."""
@@ -3271,6 +3277,328 @@ class TestEmailTemplateIsPlatformAgnostic(unittest.TestCase):
         """Test that email template footer is platform-agnostic."""
         self.assertNotIn('GitLab Repository Maintenance Team', stale_branch_mr_handler.EMAIL_TEMPLATE)
         self.assertIn('Repository Maintenance Team', stale_branch_mr_handler.EMAIL_TEMPLATE)
+
+
+class TestGitHubGetPrLastActivityDate(unittest.TestCase):
+    """Tests for github_get_pr_last_activity_date function."""
+
+    def test_uses_pr_updated_at_when_no_comments(self):
+        """Test that PR updated_at is used when there are no comments."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = datetime(2023, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        mock_pr.get_issue_comments.return_value = []
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.year, 2023)
+        self.assertEqual(result.month, 1)
+        self.assertEqual(result.day, 15)
+
+    def test_uses_comment_date_when_more_recent(self):
+        """Test that comment date is used when it's more recent than PR updated_at."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = datetime(2023, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+        mock_comment = MagicMock()
+        mock_comment.updated_at = datetime(2023, 2, 20, 15, 0, 0, tzinfo=timezone.utc)
+        mock_comment.created_at = datetime(2023, 2, 20, 14, 0, 0, tzinfo=timezone.utc)
+        mock_pr.get_issue_comments.return_value = [mock_comment]
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.month, 2)
+        self.assertEqual(result.day, 20)
+
+    def test_handles_missing_updated_at(self):
+        """Test handling when PR updated_at raises AttributeError."""
+        mock_pr = MagicMock(spec=['number', 'get_issue_comments'])
+        mock_pr.number = 42
+
+        mock_comment = MagicMock()
+        mock_comment.updated_at = datetime(2023, 2, 20, 15, 0, 0, tzinfo=timezone.utc)
+        mock_comment.created_at = datetime(2023, 2, 20, 14, 0, 0, tzinfo=timezone.utc)
+        mock_pr.get_issue_comments.return_value = [mock_comment]
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.month, 2)
+
+    def test_handles_github_exception_on_comments(self):
+        """Test handling when fetching comments raises GithubException."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = datetime(2023, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        mock_pr.get_issue_comments.side_effect = GithubException(500, "Server Error", None)
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        # Should still return the PR updated_at
+        self.assertIsNotNone(result)
+        self.assertEqual(result.month, 1)
+
+    def test_returns_none_when_no_activity(self):
+        """Test that None is returned when updated_at is None and no comments."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = None
+        mock_pr.get_issue_comments.return_value = []
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNone(result)
+
+    def test_adds_timezone_to_naive_updated_at(self):
+        """Test that naive datetime gets UTC timezone added."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = datetime(2023, 1, 15, 10, 30, 0)  # naive
+        mock_pr.get_issue_comments.return_value = []
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNotNone(result)
+        self.assertIsNotNone(result.tzinfo)
+
+
+class TestGitHubExportBranchToArchive(unittest.TestCase):
+    """Tests for github_export_branch_to_archive function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_export_creates_archive_file(self):
+        """Test that export creates an archive file on success."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_archive_link.return_value = 'https://github.com/archive/test.tar.gz'
+        mock_repo._requester.requestBlob.return_value = (200, {}, b'fake archive data')
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature-branch', self.temp_dir, 'Test-Repo'
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(os.path.exists(result))
+        self.assertTrue(result.endswith('.tar.gz'))
+
+    def test_export_returns_none_on_non_200_status(self):
+        """Test that export returns None on non-success HTTP status."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_archive_link.return_value = 'https://github.com/archive/test.tar.gz'
+        mock_repo._requester.requestBlob.return_value = (404, {}, b'Not Found')
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature-branch', self.temp_dir, 'Test-Repo'
+        )
+
+        self.assertIsNone(result)
+
+    def test_export_handles_github_error(self):
+        """Test that export handles GitHub API errors gracefully."""
+        mock_gh = MagicMock()
+        mock_gh.get_repo.side_effect = GithubException(500, "Server Error", None)
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature-branch', self.temp_dir, 'Test-Repo'
+        )
+
+        self.assertIsNone(result)
+
+    def test_export_sanitizes_filenames(self):
+        """Test that special characters in names are sanitized."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_archive_link.return_value = 'https://github.com/archive/test.tar.gz'
+        mock_repo._requester.requestBlob.return_value = (200, {}, b'fake archive data')
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature/branch-name', self.temp_dir, 'Test Repo!'
+        )
+
+        self.assertIsNotNone(result)
+        self.assertNotIn('/', os.path.basename(result))
+        self.assertNotIn('!', os.path.basename(result))
+
+    def test_export_handles_os_error(self):
+        """Test that export handles filesystem errors gracefully."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_archive_link.return_value = 'https://github.com/archive/test.tar.gz'
+        mock_repo._requester.requestBlob.return_value = (200, {}, b'fake archive data')
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature-branch', '/nonexistent/deep/path/readonly', 'Test-Repo'
+        )
+
+        self.assertIsNone(result)
+
+
+class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
+    """Tests for github_perform_automatic_archiving function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
+    @patch.object(stale_branch_mr_handler, 'github_delete_branch')
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_archives_prs_in_dry_run(self, mock_export, mock_delete, mock_close, mock_process, mock_gh):
+        """Test that dry run mode logs but doesn't perform actual operations."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [],  # No branches
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 'owner/repo', 'project_name': 'Test'}]
+        )
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=True)
+
+        self.assertEqual(result['mrs_archived'], 1)
+        self.assertEqual(result['mrs_failed'], 0)
+        mock_export.assert_not_called()  # Should not call export in dry run
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
+    @patch.object(stale_branch_mr_handler, 'github_delete_branch')
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_archives_prs_real_mode(self, mock_export, mock_delete, mock_close, mock_process, mock_gh):
+        """Test that real mode performs archiving operations for PRs."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 'owner/repo', 'project_name': 'Test'}]
+        )
+        mock_export.return_value = '/path/to/archive.tar.gz'
+        mock_close.return_value = True
+        mock_delete.return_value = True
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['mrs_archived'], 1)
+        self.assertEqual(result['mrs_failed'], 0)
+        mock_export.assert_called_once()
+        mock_close.assert_called_once()
+        mock_delete.assert_called_once()
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'github_delete_branch')
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_archives_branches_real_mode(self, mock_export, mock_delete, mock_process, mock_gh):
+        """Test that real mode performs archiving operations for branches."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [{'branch_name': 'orphan', 'project_id': 'owner/repo', 'project_name': 'Test'}],
+            []  # No PRs
+        )
+        mock_export.return_value = '/path/to/archive.tar.gz'
+        mock_delete.return_value = True
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['branches_archived'], 1)
+        self.assertEqual(result['branches_failed'], 0)
+        mock_export.assert_called_once()
+        mock_delete.assert_called_once()
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    def test_returns_empty_summary_when_nothing_to_archive(self, mock_process, mock_gh):
+        """Test that empty summary is returned when nothing to archive."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = ([], [])
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['branches_archived'], 0)
+        self.assertEqual(result['mrs_archived'], 0)
+        self.assertEqual(len(result['archived_items']), 0)
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_counts_failure_when_export_fails(self, mock_export, mock_process, mock_gh):
+        """Test that failed export is counted as failure."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 'owner/repo', 'project_name': 'Test'}]
+        )
+        mock_export.return_value = None  # Export failed
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['mrs_archived'], 0)
+        self.assertEqual(result['mrs_failed'], 1)
 
 
 if __name__ == '__main__':

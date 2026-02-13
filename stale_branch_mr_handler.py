@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import gitlab
 import yaml
@@ -437,10 +437,11 @@ def init_database(db_path: str) -> None:
         ''')
 
         # Create table for tracking MR comments
+        # project_id is TEXT to support both GitLab numeric IDs and GitHub "owner/repo" strings
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS mr_comment_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER NOT NULL,
+                project_id TEXT NOT NULL,
                 mr_iid INTEGER NOT NULL,
                 comment_index INTEGER NOT NULL,
                 last_commented_at DATETIME NOT NULL,
@@ -682,7 +683,7 @@ def record_notifications_for_items(
 
 def get_last_mr_comment_info(
     db_path: str,
-    project_id: int,
+    project_id: Union[int, str],
     mr_iid: int
 ) -> Optional[tuple]:
     """
@@ -690,7 +691,7 @@ def get_last_mr_comment_info(
 
     Args:
         db_path: Path to the SQLite database file
-        project_id: GitLab project ID
+        project_id: Project identifier (GitLab numeric ID or GitHub "owner/repo" string)
         mr_iid: Merge request internal ID
 
     Returns:
@@ -713,7 +714,7 @@ def get_last_mr_comment_info(
 
 def record_mr_comment(
     db_path: str,
-    project_id: int,
+    project_id: Union[int, str],
     mr_iid: int,
     comment_index: int,
     comment_time: Optional[datetime] = None
@@ -723,7 +724,7 @@ def record_mr_comment(
 
     Args:
         db_path: Path to the SQLite database file
-        project_id: GitLab project ID
+        project_id: Project identifier (GitLab numeric ID or GitHub "owner/repo" string)
         mr_iid: Merge request internal ID
         comment_index: Index of the comment used from MR_REMINDER_COMMENTS
         comment_time: Time of comment (defaults to now)
@@ -751,7 +752,7 @@ def record_mr_comment(
 
 def should_post_mr_comment(
     db_path: str,
-    project_id: int,
+    project_id: Union[int, str],
     mr_iid: int,
     mr_last_activity: Optional[datetime],
     inactivity_days: int,
@@ -767,7 +768,7 @@ def should_post_mr_comment(
 
     Args:
         db_path: Path to the SQLite database file
-        project_id: GitLab project ID
+        project_id: Project identifier (GitLab numeric ID or GitHub "owner/repo" string)
         mr_iid: Merge request internal ID
         mr_last_activity: Last activity datetime of the MR
         inactivity_days: Days of inactivity before posting first comment
@@ -800,7 +801,7 @@ def should_post_mr_comment(
 
 def get_next_comment_index(
     db_path: str,
-    project_id: int,
+    project_id: Union[int, str],
     mr_iid: int,
     config: Optional[dict] = None
 ) -> int:
@@ -811,9 +812,8 @@ def get_next_comment_index(
 
     Args:
         db_path: Path to the SQLite database file
-        project_id: GitLab project ID
+        project_id: Project identifier (GitLab numeric ID or GitHub "owner/repo" string)
         mr_iid: Merge request internal ID
-        config: Optional configuration dictionary
 
     Returns:
         Index of the next comment to use
@@ -2692,6 +2692,15 @@ def github_export_branch_to_archive(
         # so that private repos are properly handled
         archive_url = repo.get_archive_link('tarball', ref=branch_name)
         status, headers, data = repo._requester.requestBlob("GET", archive_url)
+
+        # Validate HTTP status before writing anything to disk
+        if status not in (200, 201, 202, 204, 302):
+            logger.error(
+                f"Failed to export branch '{branch_name}' from '{repo_name}': "
+                f"unexpected HTTP status {status}"
+            )
+            return None
+
         with open(archive_path, 'wb') as f:
             f.write(data)
 
