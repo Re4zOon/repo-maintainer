@@ -1,19 +1,41 @@
-# GitLab Stale Branch/Merge Request Notifier Configuration
+# Stale Branch/Merge Request Notifier Configuration
 # Copy this file to config.local.yaml and fill in your values
 
-# GitLab connection settings
+# =============================================================================
+# Platform Selection
+# =============================================================================
+# Choose which platform to use: "gitlab" (default) or "github"
+# platform: gitlab
+
+# =============================================================================
+# GitLab connection settings (used when platform is "gitlab" or not set)
+# =============================================================================
 gitlab:
   url: "https://gitlab.example.com"
   private_token: "your-gitlab-private-token"
 
-# Project IDs to check for stale branches
+# =============================================================================
+# GitHub connection settings (used when platform is "github")
+# =============================================================================
+# github:
+#   token: "ghp_your-github-personal-access-token"
+#   # Optional: GitHub Enterprise base URL (omit for github.com)
+#   # api_url: "https://github.example.com/api/v3"
+
+# =============================================================================
+# Projects / Repositories to monitor
+# =============================================================================
 # IMPORTANT: Only the repositories listed here will be scanned.
-# This script does NOT scan all repositories in your GitLab instance.
-# You must explicitly list each project ID you want to monitor.
+# This script does NOT scan all repositories in your instance.
+# You must explicitly list each project/repository you want to monitor.
 #
-# To find a project's ID:
-# - In GitLab UI: Go to project page → "Project overview" or "Settings > General"
-# - Via API: GET /api/v4/projects?search=project-name
+# For GitLab: Use numeric project IDs
+#   To find a project's ID:
+#   - In GitLab UI: Go to project page → "Project overview" or "Settings > General"
+#   - Via API: GET /api/v4/projects?search=project-name
+#
+# For GitHub: Use "owner/repo" format
+#   e.g., "octocat/Hello-World"
 projects:
   - 123
   - 456

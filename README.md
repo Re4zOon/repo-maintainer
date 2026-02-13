@@ -1,37 +1,42 @@
-# GitLab Stale Branch/Merge Request Notifier and Auto-Archiver
+# Stale Branch/Merge Request Notifier and Auto-Archiver
 
-A Python script that identifies stale branches and merge requests in GitLab projects, sends email notifications to their owners about upcoming cleanup, and can automatically archive very old stale items.
+A Python script that identifies stale branches and merge/pull requests in GitLab and GitHub projects, sends email notifications to their owners about upcoming cleanup, and can automatically archive very old stale items.
+
+## Supported Platforms
+
+- **GitLab** (via python-gitlab) — uses project IDs
+- **GitHub** (via PyGithub) — uses `owner/repo` format
 
 ## Features
 
-- **Detect stale merge requests** based on any activity (commits, comments, reviews, etc.)
-- **Detect stale branches** where the last commit is older than a configurable number of days (if no MR exists)
-- **Smart MR activity detection** - checks both MR metadata updates and note/comment activity
-- **Smart email routing for MRs** - uses MR assignee, author, or fallback email for notifications
-- **Check committer status** - verifies if the committer's GitLab profile is active
-- **Smart email routing for branches** - uses fallback email if the committer's profile is inactive
+- **Detect stale merge/pull requests** based on any activity (commits, comments, reviews, etc.)
+- **Detect stale branches** where the last commit is older than a configurable number of days (if no MR/PR exists)
+- **Smart MR/PR activity detection** — checks both metadata updates and note/comment activity
+- **Smart email routing for MRs/PRs** — uses assignee, author, or fallback email for notifications
+- **Check committer status** — verifies if the committer's profile is active
+- **Smart email routing for branches** — uses fallback email if the committer's profile is inactive
 - **HTML email notifications** including:
-  - List of stale merge requests with project, MR link, and last activity information
+  - List of stale merge/pull requests with project, link, and last activity information
   - List of stale branches with project and commit information
   - Notification for cleanup action required
   - Warning about automatic cleanup after a configurable number of weeks
-- **MR reminder comments** - posts friendly, humorous reminder comments directly on stale MRs for increased visibility
-- **Automatic archiving** of very old stale branches and MRs that have exceeded the cleanup period:
+- **MR/PR reminder comments** — posts friendly, humorous reminder comments directly on stale MRs/PRs for increased visibility
+- **Automatic archiving** of very old stale branches and MRs/PRs that have exceeded the cleanup period:
   - Exports the branch to a compressed local archive (tar.gz)
-  - Closes associated merge requests with an explanatory note
+  - Closes associated merge/pull requests with an explanatory note
   - Deletes the source branch
   - Safety-first approach: branch is only deleted after successful export
 - **Dry-run mode** for testing without sending emails or performing archiving
 - **Skips protected branches** to avoid notifying about main/master branches
-- **Optimized for large repositories** - efficient memory usage and parallel processing
+- **Optimized for large repositories** — efficient memory usage and parallel processing
 
 ## Performance Optimizations
 
 This tool is optimized for handling large repositories and multiple projects efficiently:
 
 ### Memory Efficiency
-- **Pagination**: Uses GitLab API iterators instead of loading all data at once
-  - Branches, merge requests, and protected branches are fetched incrementally
+- **Pagination**: Uses API iterators instead of loading all data at once
+  - Branches, merge/pull requests, and protected branches are fetched incrementally
   - Reduces memory footprint for repositories with thousands of branches/MRs
 - **Lazy evaluation**: Processes items as they're fetched rather than storing everything in memory
 
@@ -55,7 +60,7 @@ max_workers: 4
 
 ### Benchmarks
 
-Indicative performance improvements for typical use cases (based on informal testing; actual results depend on your GitLab version, network, hardware, and repository layout):
+Indicative performance improvements for typical use cases (based on informal testing; actual results depend on your platform version, network, hardware, and repository layout):
 - **Single large repository** (1000+ branches): observed up to ~40% faster runs due to pagination
 - **Multiple projects** (10+ projects): observed roughly 2-4x faster runs with parallel processing enabled
 - **Memory usage**: observed approximately 60-80% lower peak memory usage for large repositories when using pagination and lazy processing
@@ -83,7 +88,12 @@ Indicative performance improvements for typical use cases (based on informal tes
 
 Create a `config.yaml` file with the following settings:
 
+### GitLab Configuration (default)
+
 ```yaml
+# Platform selection (optional, defaults to "gitlab")
+# platform: gitlab
+
 # GitLab connection settings
 gitlab:
   url: "https://gitlab.example.com"
@@ -91,12 +101,32 @@ gitlab:
 
 # Project IDs to check for stale branches
 # IMPORTANT: Only the repositories listed here will be scanned.
-# This script does NOT scan all repositories in your GitLab instance.
-# You must explicitly list each project ID you want to monitor.
 projects:
   - 123
   - 456
+```
 
+### GitHub Configuration
+
+```yaml
+# Platform selection
+platform: github
+
+# GitHub connection settings
+github:
+  token: "ghp_your-github-personal-access-token"
+  # Optional: GitHub Enterprise base URL
+  # api_url: "https://github.example.com/api/v3"
+
+# Repositories to check (owner/repo format)
+projects:
+  - "octocat/Hello-World"
+  - "myorg/my-repo"
+```
+
+### Common Settings (both platforms)
+
+```yaml
 # Number of days after which a branch is considered stale
 stale_days: 30
 
@@ -104,7 +134,7 @@ stale_days: 30
 # After stale_days + (cleanup_weeks * 7) days, items become eligible for archiving
 cleanup_weeks: 4
 
-# Fallback email for inactive users or when MR assignee/author cannot be identified
+# Fallback email for inactive users or when MR/PR assignee/author cannot be identified
 fallback_email: "repo-maintainers@example.com"
 
 # SMTP settings
@@ -114,14 +144,14 @@ smtp:
   use_tls: true
   username: "notifications@example.com"
   password: "your-smtp-password"
-  from_email: "GitLab Maintenance <notifications@example.com>"
+  from_email: "Maintenance <notifications@example.com>"
 
 # Automatic archiving settings (optional)
 enable_auto_archive: false  # Enable via config, or use --archive flag
 archive_folder: "./archived_branches"  # Where to store branch archives
 
-# MR reminder comments settings (optional)
-enable_mr_comments: false        # Enable posting reminder comments on stale MRs
+# MR/PR reminder comments settings (optional)
+enable_mr_comments: false        # Enable posting reminder comments on stale MRs/PRs
 mr_comment_inactivity_days: 14   # Days of inactivity before first comment
 mr_comment_frequency_days: 7     # Days between subsequent comments
 
@@ -177,9 +207,9 @@ The archiving process:
 2. **Closes** any associated merge requests with an explanatory note
 3. **Deletes** the source branch (only after successful export for safety)
 
-### MR Reminder Comments
+### MR/PR Reminder Comments
 
-Enable MR reminder comments to post friendly, humorous reminders directly on stale merge requests. This provides additional visibility without affecting email notifications or archiving.
+Enable MR/PR reminder comments to post friendly, humorous reminders directly on stale merge/pull requests. This provides additional visibility without affecting email notifications or archiving.
 
 ```yaml
 # Enable in config.yaml
@@ -348,14 +378,14 @@ docker run --rm \
 
 ### Notification Mode (default)
 
-1. **Connects to GitLab** using the provided API token
-2. **Iterates through configured projects** and retrieves all open merge requests
-3. **Identifies stale MRs** based on the latest activity (including notes/comments)
+1. **Connects to GitLab or GitHub** using the provided API token
+2. **Iterates through configured projects** and retrieves all open merge/pull requests
+3. **Identifies stale MRs/PRs** based on the latest activity (including notes/comments)
 4. **Filters out protected branches** (main, master, etc.)
-5. **Identifies stale branches** based on the last commit date (only for branches without open MRs)
-6. **For stale MRs**: Groups by MR assignee/author email and sends MR notifications
-7. **For stale branches without MRs**: Groups by branch committer email
-8. **Checks if users are active** in GitLab
+5. **Identifies stale branches** based on the last commit date (only for branches without open MRs/PRs)
+6. **For stale MRs/PRs**: Groups by assignee/author email and sends notifications
+7. **For stale branches without MRs/PRs**: Groups by branch committer email
+8. **Checks if users are active** on the platform
 9. **Sends notification emails** to active users, or to fallback email for inactive users
 
 ### Automatic Archiving Mode (with `--archive` flag or `enable_auto_archive: true`)
@@ -365,7 +395,7 @@ After sending notifications, if archiving is enabled:
 1. **Identifies items ready for archiving** - items that have been stale for at least `stale_days + (cleanup_weeks * 7)` days
 2. **For each item**:
    - **Exports** the branch to a compressed tar.gz archive in the `archive_folder`
-   - **If MR exists**: Adds a note explaining the automatic closure and closes the MR
+   - **If MR/PR exists**: Adds a note explaining the automatic closure and closes the MR/PR
    - **Deletes** the source branch (only after successful export)
 3. **Logs results** showing which items were archived successfully and any failures
 
@@ -378,7 +408,7 @@ After sending notifications, if archiving is enabled:
 ## Email Template
 
 The notification email includes:
-- List of stale merge requests with project name, MR link, source branch, and last update date
+- List of stale merge/pull requests with project name, link, source branch, and last update date
 - List of stale branches with project name, branch name, and last commit date
 - Instructions for handling the items (merge, update, close, or delete)
 - Warning about automatic cleanup timeline
@@ -419,7 +449,9 @@ To customize the notification layout or wording, edit `EMAIL_TEMPLATE` in
 python -m unittest discover tests/ -v
 ```
 
-## Finding Project IDs
+## Finding Project IDs / Repository Names
+
+### GitLab
 
 To find the project ID for a GitLab repository:
 
@@ -431,10 +463,15 @@ To find the project ID for a GitLab repository:
    ```
    The response will include the `id` field for each matching project.
 
+### GitHub
+
+For GitHub, use the `owner/repo` format (e.g., `octocat/Hello-World`). You can find this in the URL of the repository page on GitHub.
+
 ## Requirements
 
 - Python 3.7+
-- GitLab API access (private token with `read_api` scope)
+- **GitLab**: GitLab API access (private token with `read_api` scope)
+- **GitHub**: GitHub personal access token (with `repo` scope)
 - SMTP server for sending emails
 
 ## License

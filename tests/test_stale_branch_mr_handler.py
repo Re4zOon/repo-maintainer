@@ -11,6 +11,12 @@ import gitlab
 import stale_branch_mr_handler
 from stale_branch_mr_handler import ConfigurationError
 
+try:
+    from github import GithubException
+    HAS_GITHUB = True
+except ImportError:
+    HAS_GITHUB = False
+
 
 class TestValidateConfig(unittest.TestCase):
     """Tests for validate_config function."""
@@ -2720,6 +2726,893 @@ class TestParallelProcessing(unittest.TestCase):
         
         max_workers = stale_branch_mr_handler.get_validated_max_workers(config)
         self.assertEqual(max_workers, 6)
+
+
+# =============================================================================
+# GitHub Platform Tests
+# =============================================================================
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestValidateConfigGitHub(unittest.TestCase):
+    """Tests for validate_config with GitHub platform."""
+
+    def test_valid_github_config(self):
+        """Test that valid GitHub config passes validation."""
+        config = {
+            'platform': 'github',
+            'github': {
+                'token': 'ghp_test123',
+            },
+            'smtp': {
+                'host': 'smtp.example.com',
+                'port': 587,
+                'from_email': 'test@example.com',
+            },
+            'projects': ['octocat/Hello-World'],
+            'fallback_email': 'fallback@example.com',
+        }
+        # Should not raise
+        stale_branch_mr_handler.validate_config(config)
+
+    def test_missing_github_section(self):
+        """Test that missing github section raises error for github platform."""
+        config = {
+            'platform': 'github',
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': ['octocat/Hello-World'],
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_mr_handler.validate_config(config)
+        self.assertIn('github', str(ctx.exception).lower())
+
+    def test_missing_github_token(self):
+        """Test that missing github token raises error."""
+        config = {
+            'platform': 'github',
+            'github': {},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': ['octocat/Hello-World'],
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_mr_handler.validate_config(config)
+        self.assertIn('token', str(ctx.exception).lower())
+
+    def test_gitlab_config_still_works(self):
+        """Test that omitting platform defaults to gitlab validation."""
+        config = {
+            'gitlab': {
+                'url': 'https://gitlab.example.com',
+                'private_token': 'token123',
+            },
+            'smtp': {
+                'host': 'smtp.example.com',
+                'port': 587,
+                'from_email': 'test@example.com',
+            },
+            'projects': [1, 2],
+            'fallback_email': 'fallback@example.com',
+        }
+        # Should not raise
+        stale_branch_mr_handler.validate_config(config)
+
+    def test_explicit_gitlab_platform(self):
+        """Test that explicit platform=gitlab still works."""
+        config = {
+            'platform': 'gitlab',
+            'gitlab': {
+                'url': 'https://gitlab.example.com',
+                'private_token': 'token123',
+            },
+            'smtp': {
+                'host': 'smtp.example.com',
+                'port': 587,
+                'from_email': 'test@example.com',
+            },
+            'projects': [1, 2],
+            'fallback_email': 'fallback@example.com',
+        }
+        # Should not raise
+        stale_branch_mr_handler.validate_config(config)
+
+    def test_unknown_platform_raises_error(self):
+        """Test that an unknown platform value raises ConfigurationError."""
+        config = {
+            'platform': 'gihub',  # typo
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': ['octocat/Hello-World'],
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_mr_handler.validate_config(config)
+        self.assertIn('gihub', str(ctx.exception))
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubGetStaleBranches(unittest.TestCase):
+    """Tests for github_get_stale_branches function."""
+
+    def test_identifies_stale_branch(self):
+        """Test that old branches are identified as stale on GitHub."""
+        mock_gh = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.name = 'Test-Repo'
+        mock_repo.full_name = 'owner/Test-Repo'
+
+        old_date = datetime.now(timezone.utc) - timedelta(days=60)
+
+        mock_branch = MagicMock()
+        mock_branch.name = 'stale-feature'
+        mock_branch.protected = False
+        mock_branch.commit.commit.committer.date = old_date
+        mock_branch.commit.commit.author.name = 'Test User'
+        mock_branch.commit.commit.author.email = 'test@example.com'
+        mock_branch.commit.commit.committer.email = 'test@example.com'
+
+        mock_repo.get_branches.return_value = [mock_branch]
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_get_stale_branches(mock_gh, 'owner/Test-Repo', 30)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['branch_name'], 'stale-feature')
+        self.assertEqual(result[0]['project_id'], 'owner/Test-Repo')
+
+    def test_ignores_recent_branch(self):
+        """Test that recent branches are not marked as stale on GitHub."""
+        mock_gh = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.name = 'Test-Repo'
+        mock_repo.full_name = 'owner/Test-Repo'
+
+        recent_date = datetime.now(timezone.utc) - timedelta(days=5)
+
+        mock_branch = MagicMock()
+        mock_branch.name = 'active-feature'
+        mock_branch.protected = False
+        mock_branch.commit.commit.committer.date = recent_date
+        mock_branch.commit.commit.author.name = 'Test User'
+        mock_branch.commit.commit.author.email = 'test@example.com'
+        mock_branch.commit.commit.committer.email = 'test@example.com'
+
+        mock_repo.get_branches.return_value = [mock_branch]
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_get_stale_branches(mock_gh, 'owner/Test-Repo', 30)
+
+        self.assertEqual(len(result), 0)
+
+    def test_ignores_protected_branch(self):
+        """Test that protected branches are ignored on GitHub."""
+        mock_gh = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.name = 'Test-Repo'
+        mock_repo.full_name = 'owner/Test-Repo'
+
+        old_date = datetime.now(timezone.utc) - timedelta(days=60)
+
+        mock_branch = MagicMock()
+        mock_branch.name = 'main'
+        mock_branch.protected = True
+        mock_branch.commit.commit.committer.date = old_date
+        mock_branch.commit.commit.author.name = 'Test User'
+        mock_branch.commit.commit.author.email = 'test@example.com'
+        mock_branch.commit.commit.committer.email = 'test@example.com'
+
+        mock_repo.get_branches.return_value = [mock_branch]
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_get_stale_branches(mock_gh, 'owner/Test-Repo', 30)
+
+        self.assertEqual(len(result), 0)
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubGetStalePullRequests(unittest.TestCase):
+    """Tests for github_get_stale_pull_requests function."""
+
+    def test_identifies_stale_pr(self):
+        """Test that old PRs are identified as stale."""
+        mock_gh = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.name = 'Test-Repo'
+        mock_repo.full_name = 'owner/Test-Repo'
+
+        old_date = datetime.now(timezone.utc) - timedelta(days=60)
+
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.title = 'Fix feature'
+        mock_pr.html_url = 'https://github.com/owner/Test-Repo/pull/42'
+        mock_pr.updated_at = old_date
+        mock_pr.head.ref = 'feature-branch'
+        mock_pr.user.login = 'testuser'
+        mock_pr.user.name = 'Test User'
+        mock_pr.user.email = 'test@example.com'
+        mock_pr.assignee = None
+        mock_pr.get_issue_comments.return_value = []
+
+        mock_repo.get_pulls.return_value = [mock_pr]
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_get_stale_pull_requests(mock_gh, 'owner/Test-Repo', 30)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['iid'], 42)
+        self.assertEqual(result[0]['title'], 'Fix feature')
+
+    def test_ignores_recent_pr(self):
+        """Test that recent PRs are not marked as stale."""
+        mock_gh = MagicMock()
+
+        mock_repo = MagicMock()
+        mock_repo.name = 'Test-Repo'
+        mock_repo.full_name = 'owner/Test-Repo'
+
+        recent_date = datetime.now(timezone.utc) - timedelta(days=5)
+
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.title = 'Active PR'
+        mock_pr.html_url = 'https://github.com/owner/Test-Repo/pull/42'
+        mock_pr.updated_at = recent_date
+        mock_pr.head.ref = 'feature-branch'
+        mock_pr.user.login = 'testuser'
+        mock_pr.user.name = 'Test User'
+        mock_pr.user.email = 'test@example.com'
+        mock_pr.assignee = None
+        mock_pr.get_issue_comments.return_value = []
+
+        mock_repo.get_pulls.return_value = [mock_pr]
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_get_stale_pull_requests(mock_gh, 'owner/Test-Repo', 30)
+
+        self.assertEqual(len(result), 0)
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubIsUserActive(unittest.TestCase):
+    """Tests for github_is_user_active function."""
+
+    def test_active_user(self):
+        """Test that found user returns True."""
+        mock_gh = MagicMock()
+        mock_user = MagicMock()
+        mock_gh.search_users.return_value = [mock_user]
+
+        result = stale_branch_mr_handler.github_is_user_active(mock_gh, 'user@example.com')
+
+        self.assertTrue(result)
+
+    def test_user_not_found(self):
+        """Test that not found user returns False."""
+        mock_gh = MagicMock()
+        mock_gh.search_users.return_value = []
+
+        result = stale_branch_mr_handler.github_is_user_active(mock_gh, 'nonexistent@example.com')
+
+        self.assertFalse(result)
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubGetUserEmailByUsername(unittest.TestCase):
+    """Tests for github_get_user_email_by_username function."""
+
+    def test_returns_email(self):
+        """Test that email is returned for existing user."""
+        mock_gh = MagicMock()
+        mock_user = MagicMock()
+        mock_user.email = 'user@example.com'
+        mock_gh.get_user.return_value = mock_user
+
+        result = stale_branch_mr_handler.github_get_user_email_by_username(mock_gh, 'testuser')
+
+        self.assertEqual(result, 'user@example.com')
+
+    def test_returns_empty_when_no_email(self):
+        """Test that empty string is returned when user has no email."""
+        mock_gh = MagicMock()
+        mock_user = MagicMock()
+        mock_user.email = None
+        mock_gh.get_user.return_value = mock_user
+
+        result = stale_branch_mr_handler.github_get_user_email_by_username(mock_gh, 'testuser')
+
+        self.assertEqual(result, '')
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubPostMrReminderComment(unittest.TestCase):
+    """Tests for github_post_mr_reminder_comment function."""
+
+    def test_dry_run_does_not_post(self):
+        """Test that dry run doesn't actually post comment."""
+        mock_gh = MagicMock()
+
+        result = stale_branch_mr_handler.github_post_mr_reminder_comment(
+            mock_gh, 'owner/repo', 42, 'Test comment', dry_run=True
+        )
+
+        self.assertTrue(result)
+
+    def test_posts_comment_successfully(self):
+        """Test successful comment posting."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_pr = MagicMock()
+        mock_gh.get_repo.return_value = mock_repo
+        mock_repo.get_pull.return_value = mock_pr
+
+        result = stale_branch_mr_handler.github_post_mr_reminder_comment(
+            mock_gh, 'owner/repo', 42, 'Test comment', dry_run=False
+        )
+
+        self.assertTrue(result)
+        mock_pr.create_issue_comment.assert_called_once_with('Test comment')
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubCloseMergeRequest(unittest.TestCase):
+    """Tests for github_close_merge_request function."""
+
+    def test_dry_run_does_not_close(self):
+        """Test that dry run doesn't actually close PR."""
+        mock_gh = MagicMock()
+
+        result = stale_branch_mr_handler.github_close_merge_request(
+            mock_gh, 'owner/repo', 42, dry_run=True
+        )
+
+        self.assertTrue(result)
+
+    def test_closes_pr_successfully(self):
+        """Test successful PR closing."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_pr = MagicMock()
+        mock_gh.get_repo.return_value = mock_repo
+        mock_repo.get_pull.return_value = mock_pr
+
+        result = stale_branch_mr_handler.github_close_merge_request(
+            mock_gh, 'owner/repo', 42, dry_run=False
+        )
+
+        self.assertTrue(result)
+        mock_pr.create_issue_comment.assert_called_once()
+        mock_pr.edit.assert_called_once_with(state='closed')
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubDeleteBranch(unittest.TestCase):
+    """Tests for github_delete_branch function."""
+
+    def test_dry_run_does_not_delete(self):
+        """Test that dry run doesn't actually delete branch."""
+        mock_gh = MagicMock()
+
+        result = stale_branch_mr_handler.github_delete_branch(
+            mock_gh, 'owner/repo', 'feature-branch', dry_run=True
+        )
+
+        self.assertTrue(result)
+
+    def test_deletes_branch_successfully(self):
+        """Test successful branch deletion."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_ref = MagicMock()
+        mock_gh.get_repo.return_value = mock_repo
+        mock_repo.get_git_ref.return_value = mock_ref
+
+        result = stale_branch_mr_handler.github_delete_branch(
+            mock_gh, 'owner/repo', 'feature-branch', dry_run=False
+        )
+
+        self.assertTrue(result)
+        mock_repo.get_git_ref.assert_called_once_with('heads/feature-branch')
+        mock_ref.delete.assert_called_once()
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubGetMergeRequestForBranch(unittest.TestCase):
+    """Tests for github_get_merge_request_for_branch function."""
+
+    def test_returns_pr_info_when_pr_exists(self):
+        """Test that PR info is returned when an open PR exists for the branch."""
+        mock_repo = MagicMock()
+        mock_repo.name = 'Test-Repo'
+        mock_repo.full_name = 'owner/Test-Repo'
+        mock_repo.owner.login = 'owner'
+
+        old_date = datetime.now(timezone.utc) - timedelta(days=5)
+
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.title = 'Fix feature'
+        mock_pr.html_url = 'https://github.com/owner/Test-Repo/pull/42'
+        mock_pr.updated_at = old_date
+        mock_pr.head.ref = 'feature-branch'
+        mock_pr.user.login = 'testuser'
+        mock_pr.user.name = 'Test User'
+        mock_pr.user.email = 'test@example.com'
+        mock_pr.assignee = None
+        mock_pr.get_issue_comments.return_value = []
+
+        mock_repo.get_pulls.return_value = [mock_pr]
+
+        result = stale_branch_mr_handler.github_get_merge_request_for_branch(mock_repo, 'feature-branch')
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result['iid'], 42)
+        self.assertEqual(result['title'], 'Fix feature')
+        self.assertEqual(result['branch_name'], 'feature-branch')
+
+    def test_returns_none_when_no_pr_exists(self):
+        """Test that None is returned when no open PR exists for the branch."""
+        mock_repo = MagicMock()
+        mock_repo.owner.login = 'owner'
+        mock_repo.get_pulls.return_value = []
+
+        result = stale_branch_mr_handler.github_get_merge_request_for_branch(mock_repo, 'orphan-branch')
+
+        self.assertIsNone(result)
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubNotificationEmail(unittest.TestCase):
+    """Tests for GitHub notification email functions."""
+
+    @patch.object(stale_branch_mr_handler, 'github_is_user_active')
+    def test_active_user_uses_own_email(self, mock_is_active):
+        """Test that active user gets their own email on GitHub."""
+        mock_is_active.return_value = True
+        mock_gh = MagicMock()
+
+        result = stale_branch_mr_handler.github_get_notification_email(
+            mock_gh, 'user@example.com', 'fallback@example.com'
+        )
+
+        self.assertEqual(result, 'user@example.com')
+
+    @patch.object(stale_branch_mr_handler, 'github_is_user_active')
+    def test_inactive_user_uses_fallback(self, mock_is_active):
+        """Test that inactive user gets fallback email on GitHub."""
+        mock_is_active.return_value = False
+        mock_gh = MagicMock()
+
+        result = stale_branch_mr_handler.github_get_notification_email(
+            mock_gh, 'user@example.com', 'fallback@example.com'
+        )
+
+        self.assertEqual(result, 'fallback@example.com')
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubCollectStaleItemsByEmail(unittest.TestCase):
+    """Tests for github_collect_stale_items_by_email function."""
+
+    @patch.object(stale_branch_mr_handler, 'github_get_stale_branches')
+    @patch.object(stale_branch_mr_handler, 'github_get_stale_pull_requests')
+    @patch.object(stale_branch_mr_handler, 'github_get_merge_request_for_branch')
+    @patch.object(stale_branch_mr_handler, 'github_get_mr_notification_email')
+    @patch.object(stale_branch_mr_handler, 'github_get_notification_email')
+    def test_groups_by_email(self, mock_get_email, mock_get_mr_email, mock_get_mr, mock_get_stale_prs, mock_get_branches):
+        """Test that GitHub items are grouped by email correctly."""
+        mock_gh = MagicMock()
+
+        mock_get_stale_prs.return_value = []
+        mock_get_branches.return_value = [
+            {
+                'branch_name': 'branch-1',
+                'project_name': 'Test-Repo',
+                'committer_email': 'user1@example.com',
+                'author_email': 'user1@example.com',
+            },
+        ]
+        mock_get_mr.return_value = None
+        mock_get_email.side_effect = lambda gh, email, fallback: email
+
+        config = {
+            'platform': 'github',
+            'stale_days': 30,
+            'fallback_email': 'fallback@example.com',
+            'projects': ['owner/Test-Repo'],
+        }
+
+        result = stale_branch_mr_handler.github_collect_stale_items_by_email(mock_gh, config)
+
+        self.assertEqual(len(result), 1)
+        self.assertIn('user1@example.com', result)
+
+
+class TestPlatformDispatch(unittest.TestCase):
+    """Tests for platform dispatch in notify_stale_branches."""
+
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'collect_stale_items_by_email')
+    def test_default_platform_uses_gitlab(self, mock_collect, mock_create_gl):
+        """Test that default platform dispatches to GitLab."""
+        mock_gl = MagicMock()
+        mock_create_gl.return_value = mock_gl
+        mock_collect.return_value = {}
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': [1],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+        }
+
+        stale_branch_mr_handler.notify_stale_branches(config, dry_run=True)
+
+        mock_create_gl.assert_called_once()
+        mock_collect.assert_called_once()
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, 'github_collect_stale_items_by_email')
+    def test_github_platform_dispatches_to_github(self, mock_collect, mock_create_gh):
+        """Test that github platform dispatches to GitHub functions."""
+        mock_gh = MagicMock()
+        mock_create_gh.return_value = mock_gh
+        mock_collect.return_value = {}
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test123'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+        }
+
+        stale_branch_mr_handler.notify_stale_branches(config, dry_run=True)
+
+        mock_create_gh.assert_called_once()
+        mock_collect.assert_called_once()
+
+
+class TestEmailTemplateIsPlatformAgnostic(unittest.TestCase):
+    """Test that the email template is platform-agnostic."""
+
+    def test_template_does_not_mention_gitlab_specifically(self):
+        """Test that email template header is platform-agnostic."""
+        self.assertNotIn('GitLab Branch Cleanup', stale_branch_mr_handler.EMAIL_TEMPLATE)
+        self.assertIn('Branch Cleanup Notification', stale_branch_mr_handler.EMAIL_TEMPLATE)
+
+    def test_template_footer_is_platform_agnostic(self):
+        """Test that email template footer is platform-agnostic."""
+        self.assertNotIn('GitLab Repository Maintenance Team', stale_branch_mr_handler.EMAIL_TEMPLATE)
+        self.assertIn('Repository Maintenance Team', stale_branch_mr_handler.EMAIL_TEMPLATE)
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubGetPrLastActivityDate(unittest.TestCase):
+    """Tests for github_get_pr_last_activity_date function."""
+
+    def test_uses_pr_updated_at_when_no_comments(self):
+        """Test that PR updated_at is used when there are no comments."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = datetime(2023, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        mock_pr.get_issue_comments.return_value = []
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.year, 2023)
+        self.assertEqual(result.month, 1)
+        self.assertEqual(result.day, 15)
+
+    def test_uses_comment_date_when_more_recent(self):
+        """Test that comment date is used when it's more recent than PR updated_at."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = datetime(2023, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+        mock_comment = MagicMock()
+        mock_comment.updated_at = datetime(2023, 2, 20, 15, 0, 0, tzinfo=timezone.utc)
+        mock_comment.created_at = datetime(2023, 2, 20, 14, 0, 0, tzinfo=timezone.utc)
+        mock_pr.get_issue_comments.return_value = [mock_comment]
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.month, 2)
+        self.assertEqual(result.day, 20)
+
+    def test_handles_missing_updated_at(self):
+        """Test handling when PR updated_at raises AttributeError."""
+        mock_pr = MagicMock(spec=['number', 'get_issue_comments'])
+        mock_pr.number = 42
+
+        mock_comment = MagicMock()
+        mock_comment.updated_at = datetime(2023, 2, 20, 15, 0, 0, tzinfo=timezone.utc)
+        mock_comment.created_at = datetime(2023, 2, 20, 14, 0, 0, tzinfo=timezone.utc)
+        mock_pr.get_issue_comments.return_value = [mock_comment]
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.month, 2)
+
+    def test_handles_github_exception_on_comments(self):
+        """Test handling when fetching comments raises GithubException."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = datetime(2023, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        mock_pr.get_issue_comments.side_effect = GithubException(500, "Server Error", None)
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        # Should still return the PR updated_at
+        self.assertIsNotNone(result)
+        self.assertEqual(result.month, 1)
+
+    def test_returns_none_when_no_activity(self):
+        """Test that None is returned when updated_at is None and no comments."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = None
+        mock_pr.get_issue_comments.return_value = []
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNone(result)
+
+    def test_adds_timezone_to_naive_updated_at(self):
+        """Test that naive datetime gets UTC timezone added."""
+        mock_pr = MagicMock()
+        mock_pr.number = 42
+        mock_pr.updated_at = datetime(2023, 1, 15, 10, 30, 0)  # naive
+        mock_pr.get_issue_comments.return_value = []
+
+        result = stale_branch_mr_handler.github_get_pr_last_activity_date(mock_pr)
+
+        self.assertIsNotNone(result)
+        self.assertIsNotNone(result.tzinfo)
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubExportBranchToArchive(unittest.TestCase):
+    """Tests for github_export_branch_to_archive function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_export_creates_archive_file(self):
+        """Test that export creates an archive file on success."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_archive_link.return_value = 'https://github.com/archive/test.tar.gz'
+        mock_repo._requester.requestBlob.return_value = (200, {}, b'fake archive data')
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature-branch', self.temp_dir, 'Test-Repo'
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(os.path.exists(result))
+        self.assertTrue(result.endswith('.tar.gz'))
+
+    def test_export_returns_none_on_non_200_status(self):
+        """Test that export returns None on non-success HTTP status."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_archive_link.return_value = 'https://github.com/archive/test.tar.gz'
+        mock_repo._requester.requestBlob.return_value = (404, {}, b'Not Found')
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature-branch', self.temp_dir, 'Test-Repo'
+        )
+
+        self.assertIsNone(result)
+
+    def test_export_handles_github_error(self):
+        """Test that export handles GitHub API errors gracefully."""
+        mock_gh = MagicMock()
+        mock_gh.get_repo.side_effect = GithubException(500, "Server Error", None)
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature-branch', self.temp_dir, 'Test-Repo'
+        )
+
+        self.assertIsNone(result)
+
+    def test_export_sanitizes_filenames(self):
+        """Test that special characters in names are sanitized."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_archive_link.return_value = 'https://github.com/archive/test.tar.gz'
+        mock_repo._requester.requestBlob.return_value = (200, {}, b'fake archive data')
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature/branch-name', self.temp_dir, 'Test Repo!'
+        )
+
+        self.assertIsNotNone(result)
+        self.assertNotIn('/', os.path.basename(result))
+        self.assertNotIn('!', os.path.basename(result))
+
+    def test_export_handles_os_error(self):
+        """Test that export handles filesystem errors gracefully."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_repo.get_archive_link.return_value = 'https://github.com/archive/test.tar.gz'
+        mock_repo._requester.requestBlob.return_value = (200, {}, b'fake archive data')
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_export_branch_to_archive(
+            mock_gh, 'owner/repo', 'feature-branch', '/nonexistent/deep/path/readonly', 'Test-Repo'
+        )
+
+        self.assertIsNone(result)
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
+    """Tests for github_perform_automatic_archiving function."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
+    @patch.object(stale_branch_mr_handler, 'github_delete_branch')
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_archives_prs_in_dry_run(self, mock_export, mock_delete, mock_close, mock_process, mock_gh):
+        """Test that dry run mode logs but doesn't perform actual operations."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [],  # No branches
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 'owner/repo', 'project_name': 'Test'}]
+        )
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=True)
+
+        self.assertEqual(result['mrs_archived'], 1)
+        self.assertEqual(result['mrs_failed'], 0)
+        mock_export.assert_not_called()  # Should not call export in dry run
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
+    @patch.object(stale_branch_mr_handler, 'github_delete_branch')
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_archives_prs_real_mode(self, mock_export, mock_delete, mock_close, mock_process, mock_gh):
+        """Test that real mode performs archiving operations for PRs."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 'owner/repo', 'project_name': 'Test'}]
+        )
+        mock_export.return_value = '/path/to/archive.tar.gz'
+        mock_close.return_value = True
+        mock_delete.return_value = True
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['mrs_archived'], 1)
+        self.assertEqual(result['mrs_failed'], 0)
+        mock_export.assert_called_once()
+        mock_close.assert_called_once()
+        mock_delete.assert_called_once()
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'github_delete_branch')
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_archives_branches_real_mode(self, mock_export, mock_delete, mock_process, mock_gh):
+        """Test that real mode performs archiving operations for branches."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [{'branch_name': 'orphan', 'project_id': 'owner/repo', 'project_name': 'Test'}],
+            []  # No PRs
+        )
+        mock_export.return_value = '/path/to/archive.tar.gz'
+        mock_delete.return_value = True
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['branches_archived'], 1)
+        self.assertEqual(result['branches_failed'], 0)
+        mock_export.assert_called_once()
+        mock_delete.assert_called_once()
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    def test_returns_empty_summary_when_nothing_to_archive(self, mock_process, mock_gh):
+        """Test that empty summary is returned when nothing to archive."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = ([], [])
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['branches_archived'], 0)
+        self.assertEqual(result['mrs_archived'], 0)
+        self.assertEqual(len(result['archived_items']), 0)
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_counts_failure_when_export_fails(self, mock_export, mock_process, mock_gh):
+        """Test that failed export is counted as failure."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 'owner/repo', 'project_name': 'Test'}]
+        )
+        mock_export.return_value = None  # Export failed
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['mrs_archived'], 0)
+        self.assertEqual(result['mrs_failed'], 1)
 
 
 if __name__ == '__main__':
