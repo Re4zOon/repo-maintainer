@@ -1221,6 +1221,62 @@ class TestNotificationDatabase(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.day, new_time.day)
 
+    def test_get_first_notification_date_for_item_uses_earliest_across_recipients(self):
+        """Test that earliest first_found_at is returned across different recipients."""
+        stale_branch_mr_handler.init_database(self.db_path)
+
+        later_time = datetime.now(timezone.utc) - timedelta(days=7)
+        earlier_time = datetime.now(timezone.utc) - timedelta(days=14)
+
+        stale_branch_mr_handler.record_notification(
+            self.db_path, 'a@example.com', 'branch', 123, 'feature-branch', later_time
+        )
+        stale_branch_mr_handler.record_notification(
+            self.db_path, 'b@example.com', 'branch', 123, 'feature-branch', earlier_time
+        )
+
+        result = stale_branch_mr_handler.get_first_notification_date_for_item(
+            self.db_path, 'branch', 123, 'feature-branch'
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.isoformat(), earlier_time.isoformat())
+
+    def test_get_first_notification_date_for_item_returns_none_when_missing(self):
+        """Test that None is returned when no notification history exists for an item."""
+        stale_branch_mr_handler.init_database(self.db_path)
+
+        result = stale_branch_mr_handler.get_first_notification_date_for_item(
+            self.db_path, 'merge_request', 123, 42
+        )
+
+        self.assertIsNone(result)
+
+    def test_is_eligible_for_auto_archive_respects_cleanup_window(self):
+        """Test archiving eligibility before and after cleanup_weeks threshold."""
+        stale_branch_mr_handler.init_database(self.db_path)
+        cleanup_weeks = 4
+
+        not_ready_time = datetime.now(timezone.utc) - timedelta(days=(cleanup_weeks * 7) - 1)
+        stale_branch_mr_handler.record_notification(
+            self.db_path, 'test@example.com', 'branch', 123, 'feature-branch', not_ready_time
+        )
+        self.assertFalse(
+            stale_branch_mr_handler.is_eligible_for_auto_archive(
+                self.db_path, 'branch', 123, 'feature-branch', cleanup_weeks
+            )
+        )
+
+        ready_time = datetime.now(timezone.utc) - timedelta(days=(cleanup_weeks * 7) + 1)
+        stale_branch_mr_handler.record_notification(
+            self.db_path, 'test@example.com', 'branch', 456, 'old-branch', ready_time
+        )
+        self.assertTrue(
+            stale_branch_mr_handler.is_eligible_for_auto_archive(
+                self.db_path, 'branch', 456, 'old-branch', cleanup_weeks
+            )
+        )
+
 
 class TestShouldSendNotification(unittest.TestCase):
     """Tests for should_send_notification function."""
@@ -2000,9 +2056,12 @@ class TestPerformAutomaticArchiving(unittest.TestCase):
 
     @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
     @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
     @patch.object(stale_branch_mr_handler, 'archive_stale_mr')
     @patch.object(stale_branch_mr_handler, 'archive_stale_branch')
-    def test_performs_archiving_for_mrs(self, mock_archive_branch, mock_archive_mr, mock_get_ready, mock_gl):
+    def test_performs_archiving_for_mrs(
+        self, mock_archive_branch, mock_archive_mr, _mock_is_eligible, mock_get_ready, mock_gl
+    ):
         """Test that archiving is performed for MRs."""
         mock_gl.return_value = MagicMock()
         mock_get_ready.return_value = (
@@ -2035,9 +2094,12 @@ class TestPerformAutomaticArchiving(unittest.TestCase):
 
     @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
     @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
     @patch.object(stale_branch_mr_handler, 'archive_stale_mr')
     @patch.object(stale_branch_mr_handler, 'archive_stale_branch')
-    def test_performs_archiving_for_branches(self, mock_archive_branch, mock_archive_mr, mock_get_ready, mock_gl):
+    def test_performs_archiving_for_branches(
+        self, mock_archive_branch, mock_archive_mr, _mock_is_eligible, mock_get_ready, mock_gl
+    ):
         """Test that archiving is performed for branches."""
         mock_gl.return_value = MagicMock()
         mock_get_ready.return_value = (
@@ -2087,6 +2149,36 @@ class TestPerformAutomaticArchiving(unittest.TestCase):
         self.assertEqual(result['branches_archived'], 0)
         self.assertEqual(result['mrs_archived'], 0)
         self.assertEqual(len(result['archived_items']), 0)
+
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'archive_stale_mr')
+    @patch.object(stale_branch_mr_handler, 'archive_stale_branch')
+    def test_skips_items_without_prior_notification(
+        self, mock_archive_branch, mock_archive_mr, mock_get_ready, mock_gl
+    ):
+        """Test that items are not auto-archived until they were previously notified."""
+        mock_gl.return_value = MagicMock()
+        mock_get_ready.return_value = (
+            [{'branch_name': 'orphan', 'project_id': 123, 'project_name': 'Test'}],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 123, 'project_name': 'Test'}]
+        )
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'projects': [123],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+            'database_path': os.path.join(self.temp_dir, 'test_notifications.db'),
+        }
+
+        result = stale_branch_mr_handler.perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['branches_archived'], 0)
+        self.assertEqual(result['mrs_archived'], 0)
+        mock_archive_branch.assert_not_called()
+        mock_archive_mr.assert_not_called()
 
     @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
     @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
@@ -3510,10 +3602,13 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
 
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
     @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
     @patch.object(stale_branch_mr_handler, 'github_delete_branch')
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
-    def test_archives_prs_in_dry_run(self, mock_export, mock_delete, mock_close, mock_process, mock_gh):
+    def test_archives_prs_in_dry_run(
+        self, mock_export, mock_delete, mock_close, _mock_is_eligible, mock_process, mock_gh
+    ):
         """Test that dry run mode logs but doesn't perform actual operations."""
         mock_gh.return_value = MagicMock()
         mock_process.return_value = (
@@ -3538,10 +3633,13 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
 
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
     @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
     @patch.object(stale_branch_mr_handler, 'github_delete_branch')
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
-    def test_archives_prs_real_mode(self, mock_export, mock_delete, mock_close, mock_process, mock_gh):
+    def test_archives_prs_real_mode(
+        self, mock_export, mock_delete, mock_close, _mock_is_eligible, mock_process, mock_gh
+    ):
         """Test that real mode performs archiving operations for PRs."""
         mock_gh.return_value = MagicMock()
         mock_process.return_value = (
@@ -3571,9 +3669,12 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
 
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
     @patch.object(stale_branch_mr_handler, 'github_delete_branch')
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
-    def test_archives_branches_real_mode(self, mock_export, mock_delete, mock_process, mock_gh):
+    def test_archives_branches_real_mode(
+        self, mock_export, mock_delete, _mock_is_eligible, mock_process, mock_gh
+    ):
         """Test that real mode performs archiving operations for branches."""
         mock_gh.return_value = MagicMock()
         mock_process.return_value = (
@@ -3623,6 +3724,33 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
 
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_skips_items_without_prior_notification(self, mock_export, mock_process, mock_gh):
+        """Test that GitHub items are not archived before a prior notification exists."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [{'branch_name': 'orphan', 'project_id': 'owner/repo', 'project_name': 'Test'}],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 'owner/repo', 'project_name': 'Test'}]
+        )
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+            'database_path': os.path.join(self.temp_dir, 'test_notifications.db'),
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['branches_archived'], 0)
+        self.assertEqual(result['mrs_archived'], 0)
+        mock_export.assert_not_called()
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
     def test_uses_auto_archive_projects_whitelist(self, mock_process, mock_gh):
         """Test that GitHub auto-archiving only processes whitelisted repositories."""
         mock_gh.return_value = MagicMock()
@@ -3645,8 +3773,11 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
 
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
-    def test_counts_failure_when_export_fails(self, mock_export, mock_process, mock_gh):
+    def test_counts_failure_when_export_fails(
+        self, mock_export, _mock_is_eligible, mock_process, mock_gh
+    ):
         """Test that failed export is counted as failure."""
         mock_gh.return_value = MagicMock()
         mock_process.return_value = (
