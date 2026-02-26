@@ -86,7 +86,7 @@ EMAIL_TEMPLATE = """
                 <br>
                 <small>Last updated: {{ mr.last_updated }} by {{ mr.author_name }}</small>
                 <br>
-                <small><a href="{{ mr.auto_archive_opt_out_link }}">Skip auto-archiving for this MR</a> by adding comment <code>{{ prevent_auto_archive_comment }}</code></small>
+                <small><a href="{{ mr.auto_archive_opt_out_link }}">Skip auto-archiving for this item</a> by adding comment <code>{{ prevent_auto_archive_comment }}</code></small>
             </div>
             {% endfor %}
         </div>
@@ -573,10 +573,13 @@ def get_auto_archive_opt_out_link(web_url: str) -> str:
     if not web_url:
         return ""
     parsed_url = urlparse(web_url)
+    # GitHub/GHE PR URLs follow /<owner>/<repo>/pull/<number>
+    path_parts = [part for part in parsed_url.path.split('/') if part]
     is_github_pr = (
         parsed_url.scheme in ('http', 'https')
-        and parsed_url.hostname == 'github.com'
-        and '/pull/' in parsed_url.path
+        and len(path_parts) >= 4
+        and path_parts[2] == 'pull'
+        and path_parts[3].isdigit()
     )
     if is_github_pr:
         return f"{web_url}#issuecomment-new"
