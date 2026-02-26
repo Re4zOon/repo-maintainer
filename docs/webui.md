@@ -1,6 +1,6 @@
 # WebUI Guide
 
-The Repo Maintainer WebUI provides a browser-based way to monitor stale branch/MR activity and safely update non-sensitive configuration values.
+The Repo Maintainer WebUI provides a browser-based way to monitor stale branch/merge request (MR) activity and safely update non-sensitive configuration values.
 
 ## At a glance
 
@@ -78,5 +78,5 @@ python -m webui.app -c config.yaml --debug
 
 ## Security notes
 
-- Sensitive values (for example GitLab/GitHub tokens or SMTP password) are intentionally **not editable** in the WebUI.
+- Sensitive values (for example, GitLab/GitHub tokens or SMTP password) are intentionally **not editable** in the WebUI.
 - Always set `WEBUI_USERNAME`, `WEBUI_PASSWORD`, and preferably `WEBUI_SECRET_KEY` explicitly in shared environments.

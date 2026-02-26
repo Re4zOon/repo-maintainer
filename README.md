@@ -239,7 +239,7 @@ The comments are designed to be clear and encourage action while keeping things 
 
 The tool includes a web-based interface for monitoring statistics and managing configuration.
 
-👉 See the dedicated **[WebUI Guide](docs/webui.md)** for:
+See the dedicated **[WebUI Guide](docs/webui.md)** for:
 - Feature walkthrough
 - API endpoint overview
 - Environment variables
@@ -292,7 +292,7 @@ python -m webui.app -c config.yaml --port 8080
 python -m webui.app -c config.yaml --debug
 ```
 
-For security, sensitive settings (API tokens and passwords) remain read-only in the WebUI.
+Note: For security, sensitive settings (API tokens and passwords) remain read-only in the WebUI.
 
 ## Docker Deployment
 
