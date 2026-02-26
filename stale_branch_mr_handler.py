@@ -1080,6 +1080,10 @@ def validate_config(config: dict) -> None:
     if not config.get('projects'):
         raise ConfigurationError("No projects configured. Add project IDs to 'projects' list.")
 
+    auto_archive_projects = config.get('auto_archive_projects')
+    if auto_archive_projects is not None and not isinstance(auto_archive_projects, list):
+        raise ConfigurationError("'auto_archive_projects' must be a list when provided.")
+
     if not config.get('fallback_email'):
         logger.warning(
             "No fallback_email configured. Branches from inactive users will be skipped."
@@ -1947,6 +1951,9 @@ def perform_automatic_archiving(config: dict, dry_run: bool = False) -> dict:
     archive_folder = config.get('archive_folder', DEFAULT_ARCHIVE_FOLDER)
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
+    archive_projects = config.get('auto_archive_projects')
+    if archive_projects is None:
+        archive_projects = config.get('projects', [])
 
     summary = {
         'branches_archived': 0,
@@ -1960,7 +1967,9 @@ def perform_automatic_archiving(config: dict, dry_run: bool = False) -> dict:
         'total_days': stale_days + (cleanup_weeks * 7),
     }
 
-    branches_to_archive, mrs_to_archive = get_branches_ready_for_archiving(gl, config)
+    archiving_config = dict(config)
+    archiving_config['projects'] = archive_projects
+    branches_to_archive, mrs_to_archive = get_branches_ready_for_archiving(gl, archiving_config)
 
     logger.info(
         f"Found {len(branches_to_archive)} branches and {len(mrs_to_archive)} MRs "
@@ -3269,7 +3278,9 @@ def github_perform_automatic_archiving(config: dict, dry_run: bool = False) -> d
     archive_folder = config.get('archive_folder', DEFAULT_ARCHIVE_FOLDER)
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
-    repo_names = config.get('projects', [])
+    repo_names = config.get('auto_archive_projects')
+    if repo_names is None:
+        repo_names = config.get('projects', [])
     max_workers = get_validated_max_workers(config)
 
     summary = {
