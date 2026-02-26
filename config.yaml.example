@@ -149,6 +149,13 @@ enable_auto_archive: false
 # Default: ./archived_branches
 archive_folder: "./archived_branches"
 
+# Optional whitelist of projects/repos to auto-archive.
+# Notifications/checks still run for all entries in `projects`.
+# If omitted, all `projects` are eligible for auto-archiving.
+# auto_archive_projects:
+#   - 123                  # GitLab example
+#   - "myorg/config-repo"  # GitHub example
+
 # =============================================================================
 # MR Reminder Comments Settings
 # =============================================================================

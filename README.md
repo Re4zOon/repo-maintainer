@@ -157,6 +157,8 @@ smtp:
 # Automatic archiving settings (optional)
 enable_auto_archive: false  # Enable via config, or use --archive flag
 archive_folder: "./archived_branches"  # Where to store branch archives
+# Optional: only auto-archive these projects/repos (still check/alert all `projects`)
+# auto_archive_projects: [123, "myorg/config-repo"]
 
 # MR/PR reminder comments settings (optional)
 enable_mr_comments: false        # Enable posting reminder comments on stale MRs/PRs
@@ -214,6 +216,8 @@ The archiving process:
 1. **Exports** the branch to a compressed archive (tar.gz) in the `archive_folder`
 2. **Closes** any associated merge requests with an explanatory note
 3. **Deletes** the source branch (only after successful export for safety)
+
+To auto-archive only specific repositories/projects, set `auto_archive_projects`. Notifications and stale checks still apply to all configured `projects`.
 
 ### MR/PR Reminder Comments
 

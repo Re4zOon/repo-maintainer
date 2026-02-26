@@ -86,6 +86,18 @@ class TestValidateConfig(unittest.TestCase):
             stale_branch_mr_handler.validate_config(config)
         self.assertIn('projects', str(ctx.exception).lower())
 
+    def test_invalid_auto_archive_projects_type(self):
+        """Test that auto_archive_projects must be a list when provided."""
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': [1],
+            'auto_archive_projects': '1',
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_mr_handler.validate_config(config)
+        self.assertIn('auto_archive_projects', str(ctx.exception))
+
 
 class TestParseDateCommit(unittest.TestCase):
     """Tests for parse_commit_date function."""
@@ -2076,6 +2088,27 @@ class TestPerformAutomaticArchiving(unittest.TestCase):
         self.assertEqual(result['mrs_archived'], 0)
         self.assertEqual(len(result['archived_items']), 0)
 
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
+    def test_uses_auto_archive_projects_whitelist(self, mock_get_ready, mock_gl):
+        """Test that auto-archiving only targets whitelisted projects when configured."""
+        mock_gl.return_value = MagicMock()
+        mock_get_ready.return_value = ([], [])
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'projects': [123, 456],
+            'auto_archive_projects': [456],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        stale_branch_mr_handler.perform_automatic_archiving(config, dry_run=False)
+
+        called_config = mock_get_ready.call_args[0][1]
+        self.assertEqual(called_config['projects'], [456])
+
 
 # =============================================================================
 # Tests for MR Reminder Comments Functionality
@@ -3587,6 +3620,28 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
         self.assertEqual(result['branches_archived'], 0)
         self.assertEqual(result['mrs_archived'], 0)
         self.assertEqual(len(result['archived_items']), 0)
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    def test_uses_auto_archive_projects_whitelist(self, mock_process, mock_gh):
+        """Test that GitHub auto-archiving only processes whitelisted repositories."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = ([], [])
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/code-repo', 'owner/config-repo'],
+            'auto_archive_projects': ['owner/config-repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(mock_process.call_count, 1)
+        self.assertEqual(mock_process.call_args[0][1], 'owner/config-repo')
 
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
