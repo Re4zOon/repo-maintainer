@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List, Optional, Union
+from urllib.parse import urlparse
 
 import gitlab
 import yaml
@@ -571,7 +572,13 @@ def get_auto_archive_opt_out_link(web_url: str) -> str:
     """Build a link to the MR/PR comment area."""
     if not web_url:
         return ""
-    if "github.com" in web_url and "/pull/" in web_url:
+    parsed_url = urlparse(web_url)
+    is_github_pr = (
+        parsed_url.scheme in ('http', 'https')
+        and parsed_url.hostname == 'github.com'
+        and '/pull/' in parsed_url.path
+    )
+    if is_github_pr:
         return f"{web_url}#issuecomment-new"
     return f"{web_url}#notes"
 
@@ -1398,6 +1405,7 @@ def merge_request_has_opt_out_comment(gl: gitlab.Gitlab, mr_info: dict, opt_out_
         project = gl.projects.get(mr_info['project_id'])
         mr = project.mergerequests.get(mr_info['iid'])
         notes_iter = mr.notes.list(order_by='created_at', sort='desc', per_page=20, iterator=True)
+        checked = 0
         for note in notes_iter:
             body = getattr(note, 'body', '')
             if isinstance(body, str) and marker in body.lower():
@@ -1406,6 +1414,9 @@ def merge_request_has_opt_out_comment(gl: gitlab.Gitlab, mr_info: dict, opt_out_
                     f"{mr_info['project_name']} due to opt-out comment marker"
                 )
                 return True
+            checked += 1
+            if checked >= 20:
+                break
     except gitlab.exceptions.GitlabError as e:
         logger.debug(
             f"Could not check opt-out comments for MR !{mr_info.get('iid', 'unknown')}: {e}"
@@ -2655,9 +2666,8 @@ def github_merge_request_has_opt_out_comment(gh, pr_info: dict, opt_out_comment:
     try:
         repo = gh.get_repo(pr_info['project_id'])
         pr = repo.get_pull(pr_info['iid'])
-        comments = pr.get_issue_comments(sort="created", direction="desc")
-        checked = 0
-        for comment in comments:
+        recent_comments = pr.get_issue_comments(sort="created", direction="desc").get_page(0)
+        for comment in recent_comments[:20]:
             body = getattr(comment, 'body', '')
             if isinstance(body, str) and marker in body.lower():
                 logger.info(
@@ -2665,9 +2675,6 @@ def github_merge_request_has_opt_out_comment(gh, pr_info: dict, opt_out_comment:
                     f"{pr_info['project_name']} due to opt-out comment marker"
                 )
                 return True
-            checked += 1
-            if checked >= 20:
-                break
     except GithubException as e:
         logger.debug(
             f"Could not check opt-out comments for PR #{pr_info.get('iid', 'unknown')}: {e}"
