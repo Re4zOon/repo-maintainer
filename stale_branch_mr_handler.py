@@ -84,6 +84,8 @@ EMAIL_TEMPLATE = """
                 <small>Source branch: <code>{{ mr.branch_name }}</code></small>
                 <br>
                 <small>Last updated: {{ mr.last_updated }} by {{ mr.author_name }}</small>
+                <br>
+                <small><a href="{{ mr.auto_archive_opt_out_link }}">Skip auto-archiving for this MR</a> by adding comment <code>{{ prevent_auto_archive_comment }}</code></small>
             </div>
             {% endfor %}
         </div>
@@ -130,6 +132,7 @@ DEFAULT_DATABASE_PATH = "./notification_history.db"
 # Default configuration values for automatic archiving
 DEFAULT_ARCHIVE_FOLDER = "./archived_branches"
 DEFAULT_ENABLE_AUTO_ARCHIVE = False
+DEFAULT_PREVENT_AUTO_ARCHIVE_COMMENT = "#skip-auto-archive"
 
 # Default configuration values for MR comments
 DEFAULT_ENABLE_MR_COMMENTS = False
@@ -554,6 +557,23 @@ def is_eligible_for_auto_archive(
 
     cutoff = datetime.now(timezone.utc) - timedelta(weeks=cleanup_weeks)
     return first_notified_at <= cutoff
+
+
+def get_prevent_auto_archive_comment(config: Optional[dict] = None) -> str:
+    """Get the comment text used to opt out of auto-archiving."""
+    configured = (config or {}).get('prevent_auto_archive_comment')
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    return DEFAULT_PREVENT_AUTO_ARCHIVE_COMMENT
+
+
+def get_auto_archive_opt_out_link(web_url: str) -> str:
+    """Build a link to the MR/PR comment area."""
+    if not web_url:
+        return ""
+    if "github.com" in web_url and "/pull/" in web_url:
+        return f"{web_url}#issuecomment-new"
+    return f"{web_url}#notes"
 
 
 def record_notification(
@@ -1147,6 +1167,10 @@ def validate_config(config: dict) -> None:
     if auto_archive_projects is not None and not isinstance(auto_archive_projects, list):
         raise ConfigurationError("'auto_archive_projects' must be a list when provided.")
 
+    prevent_auto_archive_comment = config.get('prevent_auto_archive_comment')
+    if prevent_auto_archive_comment is not None and not isinstance(prevent_auto_archive_comment, str):
+        raise ConfigurationError("'prevent_auto_archive_comment' must be a string when provided.")
+
     if not config.get('fallback_email'):
         logger.warning(
             "No fallback_email configured. Branches from inactive users will be skipped."
@@ -1362,6 +1386,32 @@ def get_mr_last_activity_date(project, mr) -> Optional[datetime]:
         logger.debug(f"Error fetching notes for MR !{mr.iid}: {e}")
 
     return last_activity
+
+
+def merge_request_has_opt_out_comment(gl: gitlab.Gitlab, mr_info: dict, opt_out_comment: str) -> bool:
+    """Check whether an MR has a comment that opts out of auto-archiving."""
+    marker = (opt_out_comment or "").strip().lower()
+    if not marker:
+        return False
+
+    try:
+        project = gl.projects.get(mr_info['project_id'])
+        mr = project.mergerequests.get(mr_info['iid'])
+        notes_iter = mr.notes.list(order_by='created_at', sort='desc', per_page=20, iterator=True)
+        for note in notes_iter:
+            body = getattr(note, 'body', '')
+            if isinstance(body, str) and marker in body.lower():
+                logger.info(
+                    f"Skipping auto-archive for MR !{mr_info['iid']} in "
+                    f"{mr_info['project_name']} due to opt-out comment marker"
+                )
+                return True
+    except gitlab.exceptions.GitlabError as e:
+        logger.debug(
+            f"Could not check opt-out comments for MR !{mr_info.get('iid', 'unknown')}: {e}"
+        )
+
+    return False
 
 
 def get_merge_request_for_branch(project, branch_name: str) -> Optional[dict]:
@@ -2012,6 +2062,7 @@ def perform_automatic_archiving(config: dict, dry_run: bool = False) -> dict:
     gl = create_gitlab_client(config)
 
     archive_folder = config.get('archive_folder', DEFAULT_ARCHIVE_FOLDER)
+    prevent_auto_archive_comment = get_prevent_auto_archive_comment(config)
     db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
@@ -2047,6 +2098,10 @@ def perform_automatic_archiving(config: dict, dry_run: bool = False) -> dict:
         if is_eligible_for_auto_archive(
             db_path, 'merge_request', mr['project_id'], mr['iid'], cleanup_weeks
         )
+    ]
+    mrs_to_archive = [
+        mr for mr in mrs_to_archive
+        if not merge_request_has_opt_out_comment(gl, mr, prevent_auto_archive_comment)
     ]
 
     logger.info(
@@ -2422,14 +2477,20 @@ def generate_email_content(
     """
     # Get a random greeting and render it with stale_days
     greeting = get_random_email_greeting(stale_days, config)
+    prevent_auto_archive_comment = get_prevent_auto_archive_comment(config)
+    merge_requests_with_opt_out = [
+        {**mr, 'auto_archive_opt_out_link': get_auto_archive_opt_out_link(mr.get('web_url', ''))}
+        for mr in (merge_requests or [])
+    ]
 
     template = Template(EMAIL_TEMPLATE)
     return template.render(
         branches=branches,
-        merge_requests=merge_requests or [],
+        merge_requests=merge_requests_with_opt_out,
         stale_days=stale_days,
         cleanup_weeks=cleanup_weeks,
-        greeting=greeting
+        greeting=greeting,
+        prevent_auto_archive_comment=prevent_auto_archive_comment
     )
 
 
@@ -2583,6 +2644,36 @@ def github_get_pr_last_activity_date(pr) -> Optional[datetime]:
         logger.debug(f"Error fetching comments for PR #{pr.number}: {e}")
 
     return last_activity
+
+
+def github_merge_request_has_opt_out_comment(gh, pr_info: dict, opt_out_comment: str) -> bool:
+    """Check whether a GitHub PR has a comment that opts out of auto-archiving."""
+    marker = (opt_out_comment or "").strip().lower()
+    if not marker:
+        return False
+
+    try:
+        repo = gh.get_repo(pr_info['project_id'])
+        pr = repo.get_pull(pr_info['iid'])
+        comments = pr.get_issue_comments(sort="created", direction="desc")
+        checked = 0
+        for comment in comments:
+            body = getattr(comment, 'body', '')
+            if isinstance(body, str) and marker in body.lower():
+                logger.info(
+                    f"Skipping auto-archive for PR #{pr_info['iid']} in "
+                    f"{pr_info['project_name']} due to opt-out comment marker"
+                )
+                return True
+            checked += 1
+            if checked >= 20:
+                break
+    except GithubException as e:
+        logger.debug(
+            f"Could not check opt-out comments for PR #{pr_info.get('iid', 'unknown')}: {e}"
+        )
+
+    return False
 
 
 def _build_github_pr_info_dict(repo, pr, branch_name: Optional[str] = None) -> dict:
@@ -3354,6 +3445,7 @@ def github_perform_automatic_archiving(config: dict, dry_run: bool = False) -> d
     gh = create_github_client(config)
 
     archive_folder = config.get('archive_folder', DEFAULT_ARCHIVE_FOLDER)
+    prevent_auto_archive_comment = get_prevent_auto_archive_comment(config)
     db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
@@ -3410,6 +3502,10 @@ def github_perform_automatic_archiving(config: dict, dry_run: bool = False) -> d
         if is_eligible_for_auto_archive(
             db_path, 'merge_request', pr['project_id'], pr['iid'], cleanup_weeks
         )
+    ]
+    all_prs_to_archive = [
+        pr for pr in all_prs_to_archive
+        if not github_merge_request_has_opt_out_comment(gh, pr, prevent_auto_archive_comment)
     ]
 
     logger.info(

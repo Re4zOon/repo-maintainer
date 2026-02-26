@@ -689,6 +689,29 @@ class TestGenerateEmailContentWithMRs(unittest.TestCase):
         self.assertIn('!42', result)
         self.assertIn('Fix feature', result)
         self.assertIn('Stale Merge Requests', result)
+        self.assertIn('#skip-auto-archive', result)
+        self.assertIn('#notes', result)
+
+    def test_generates_html_with_github_opt_out_link(self):
+        """Test that GitHub PR links target the new comment anchor."""
+        merge_requests = [
+            {
+                'project_name': 'Test Repo',
+                'branch_name': 'feature-branch',
+                'iid': 7,
+                'title': 'Fix feature',
+                'web_url': 'https://github.com/acme/repo/pull/7',
+                'last_updated': '2023-01-15 10:00:00',
+                'author_name': 'Test User',
+            }
+        ]
+
+        result = stale_branch_mr_handler.generate_email_content(
+            [], 30, 4, merge_requests, {'prevent_auto_archive_comment': '#keep-open'}
+        )
+
+        self.assertIn('#issuecomment-new', result)
+        self.assertIn('#keep-open', result)
 
     def test_generates_html_with_both_branches_and_mrs(self):
         """Test email content with both branches and merge requests."""
@@ -2057,10 +2080,11 @@ class TestPerformAutomaticArchiving(unittest.TestCase):
     @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
     @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
     @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'merge_request_has_opt_out_comment', return_value=False)
     @patch.object(stale_branch_mr_handler, 'archive_stale_mr')
     @patch.object(stale_branch_mr_handler, 'archive_stale_branch')
     def test_performs_archiving_for_mrs(
-        self, mock_archive_branch, mock_archive_mr, _mock_is_eligible, mock_get_ready, mock_gl
+        self, mock_archive_branch, mock_archive_mr, _mock_opt_out, _mock_is_eligible, mock_get_ready, mock_gl
     ):
         """Test that archiving is performed for MRs."""
         mock_gl.return_value = MagicMock()
@@ -2178,6 +2202,35 @@ class TestPerformAutomaticArchiving(unittest.TestCase):
         self.assertEqual(result['branches_archived'], 0)
         self.assertEqual(result['mrs_archived'], 0)
         mock_archive_branch.assert_not_called()
+        mock_archive_mr.assert_not_called()
+
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'merge_request_has_opt_out_comment', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'archive_stale_mr')
+    def test_skips_mr_with_opt_out_comment(
+        self, mock_archive_mr, _mock_opt_out, _mock_is_eligible, mock_get_ready, mock_gl
+    ):
+        """Test that MRs with opt-out comment are skipped from auto-archiving."""
+        mock_gl.return_value = MagicMock()
+        mock_get_ready.return_value = (
+            [],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 123, 'project_name': 'Test'}]
+        )
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'projects': [123],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['mrs_archived'], 0)
+        self.assertEqual(result['mrs_failed'], 0)
         mock_archive_mr.assert_not_called()
 
     @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
@@ -3603,11 +3656,12 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
     @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_merge_request_has_opt_out_comment', return_value=False)
     @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
     @patch.object(stale_branch_mr_handler, 'github_delete_branch')
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
     def test_archives_prs_in_dry_run(
-        self, mock_export, mock_delete, mock_close, _mock_is_eligible, mock_process, mock_gh
+        self, mock_export, mock_delete, mock_close, _mock_opt_out, _mock_is_eligible, mock_process, mock_gh
     ):
         """Test that dry run mode logs but doesn't perform actual operations."""
         mock_gh.return_value = MagicMock()
@@ -3634,11 +3688,12 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
     @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_merge_request_has_opt_out_comment', return_value=False)
     @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
     @patch.object(stale_branch_mr_handler, 'github_delete_branch')
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
     def test_archives_prs_real_mode(
-        self, mock_export, mock_delete, mock_close, _mock_is_eligible, mock_process, mock_gh
+        self, mock_export, mock_delete, mock_close, _mock_opt_out, _mock_is_eligible, mock_process, mock_gh
     ):
         """Test that real mode performs archiving operations for PRs."""
         mock_gh.return_value = MagicMock()
@@ -3774,9 +3829,10 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
     @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_merge_request_has_opt_out_comment', return_value=False)
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
     def test_counts_failure_when_export_fails(
-        self, mock_export, _mock_is_eligible, mock_process, mock_gh
+        self, mock_export, _mock_opt_out, _mock_is_eligible, mock_process, mock_gh
     ):
         """Test that failed export is counted as failure."""
         mock_gh.return_value = MagicMock()
@@ -3799,6 +3855,36 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
 
         self.assertEqual(result['mrs_archived'], 0)
         self.assertEqual(result['mrs_failed'], 1)
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_merge_request_has_opt_out_comment', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_skips_pr_with_opt_out_comment(
+        self, mock_export, _mock_opt_out, _mock_is_eligible, mock_process, mock_gh
+    ):
+        """Test that PRs with opt-out comment are skipped from auto-archiving."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 'owner/repo', 'project_name': 'Test'}]
+        )
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['mrs_archived'], 0)
+        self.assertEqual(result['mrs_failed'], 0)
+        mock_export.assert_not_called()
 
 
 if __name__ == '__main__':

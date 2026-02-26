@@ -159,6 +159,8 @@ enable_auto_archive: false  # Enable via config, or use --archive flag
 archive_folder: "./archived_branches"  # Where to store branch archives
 # Optional: only auto-archive these projects/repos (still check/alert all `projects`)
 # auto_archive_projects: [123, "myorg/config-repo"]
+# Optional: MR/PR comment marker that skips auto-archiving for that item only
+# prevent_auto_archive_comment: "#skip-auto-archive"
 
 # MR/PR reminder comments settings (optional)
 enable_mr_comments: false        # Enable posting reminder comments on stale MRs/PRs
@@ -218,6 +220,8 @@ The archiving process:
 3. **Deletes** the source branch (only after successful export for safety)
 
 To auto-archive only specific repositories/projects, set `auto_archive_projects`. Notifications and stale checks still apply to all configured `projects`.
+
+To opt out a specific MR/PR from auto-archiving, add a comment containing `#skip-auto-archive` (or your configured `prevent_auto_archive_comment`). Email reminders continue as usual; only auto-archiving is skipped for that item.
 
 ### MR/PR Reminder Comments
 
