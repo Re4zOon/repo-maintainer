@@ -1221,6 +1221,62 @@ class TestNotificationDatabase(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.day, new_time.day)
 
+    def test_get_first_notification_date_for_item_uses_earliest_across_recipients(self):
+        """Test that earliest first_found_at is returned across different recipients."""
+        stale_branch_mr_handler.init_database(self.db_path)
+
+        later_time = datetime.now(timezone.utc) - timedelta(days=7)
+        earlier_time = datetime.now(timezone.utc) - timedelta(days=14)
+
+        stale_branch_mr_handler.record_notification(
+            self.db_path, 'a@example.com', 'branch', 123, 'feature-branch', later_time
+        )
+        stale_branch_mr_handler.record_notification(
+            self.db_path, 'b@example.com', 'branch', 123, 'feature-branch', earlier_time
+        )
+
+        result = stale_branch_mr_handler.get_first_notification_date_for_item(
+            self.db_path, 'branch', 123, 'feature-branch'
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.isoformat(), earlier_time.isoformat())
+
+    def test_get_first_notification_date_for_item_returns_none_when_missing(self):
+        """Test that None is returned when no notification history exists for an item."""
+        stale_branch_mr_handler.init_database(self.db_path)
+
+        result = stale_branch_mr_handler.get_first_notification_date_for_item(
+            self.db_path, 'merge_request', 123, 42
+        )
+
+        self.assertIsNone(result)
+
+    def test_is_eligible_for_auto_archive_respects_cleanup_window(self):
+        """Test archiving eligibility before and after cleanup_weeks threshold."""
+        stale_branch_mr_handler.init_database(self.db_path)
+        cleanup_weeks = 4
+
+        not_ready_time = datetime.now(timezone.utc) - timedelta(days=(cleanup_weeks * 7) - 1)
+        stale_branch_mr_handler.record_notification(
+            self.db_path, 'test@example.com', 'branch', 123, 'feature-branch', not_ready_time
+        )
+        self.assertFalse(
+            stale_branch_mr_handler.is_eligible_for_auto_archive(
+                self.db_path, 'branch', 123, 'feature-branch', cleanup_weeks
+            )
+        )
+
+        ready_time = datetime.now(timezone.utc) - timedelta(days=(cleanup_weeks * 7) + 1)
+        stale_branch_mr_handler.record_notification(
+            self.db_path, 'test@example.com', 'branch', 456, 'old-branch', ready_time
+        )
+        self.assertTrue(
+            stale_branch_mr_handler.is_eligible_for_auto_archive(
+                self.db_path, 'branch', 456, 'old-branch', cleanup_weeks
+            )
+        )
+
 
 class TestShouldSendNotification(unittest.TestCase):
     """Tests for should_send_notification function."""
