@@ -517,7 +517,7 @@ def get_first_notification_date_for_item(
         cursor.execute('''
             SELECT MIN(first_found_at) FROM notification_history
             WHERE item_type = ? AND project_id = ? AND item_key = ?
-        ''', (item_type, project_id, str(item_key)))
+        ''', (item_type, str(project_id), str(item_key)))
 
         row = cursor.fetchone()
 
