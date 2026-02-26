@@ -78,5 +78,5 @@ python -m webui.app -c config.yaml --debug
 
 ## Security notes
 
-- Sensitive values (for example, GitLab/GitHub tokens or SMTP password) are intentionally **not editable** in the WebUI.
+- Sensitive values (e.g., GitLab/GitHub tokens or SMTP password) are intentionally **not editable** in the WebUI.
 - Always set `WEBUI_USERNAME`, `WEBUI_PASSWORD`, and preferably `WEBUI_SECRET_KEY` explicitly in shared environments.
