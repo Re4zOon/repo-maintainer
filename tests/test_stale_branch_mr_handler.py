@@ -98,6 +98,117 @@ class TestValidateConfig(unittest.TestCase):
             stale_branch_mr_handler.validate_config(config)
         self.assertIn('auto_archive_projects', str(ctx.exception))
 
+    def test_invalid_prevent_auto_archive_comment_type(self):
+        """Test that prevent_auto_archive_comment must be a string when provided."""
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'smtp': {'host': 'smtp.example.com', 'port': 587, 'from_email': 'test@example.com'},
+            'projects': [1],
+            'prevent_auto_archive_comment': ['#skip-auto-archive'],
+        }
+        with self.assertRaises(ConfigurationError) as ctx:
+            stale_branch_mr_handler.validate_config(config)
+        self.assertIn('prevent_auto_archive_comment', str(ctx.exception))
+
+
+class TestAutoArchiveOptOutHelpers(unittest.TestCase):
+    """Tests for auto-archive opt-out helper functions."""
+
+    def test_get_prevent_auto_archive_comment_default_when_missing(self):
+        """Test default marker is returned when config key is missing."""
+        self.assertEqual(
+            stale_branch_mr_handler.get_prevent_auto_archive_comment({}),
+            stale_branch_mr_handler.DEFAULT_PREVENT_AUTO_ARCHIVE_COMMENT
+        )
+
+    def test_get_prevent_auto_archive_comment_default_when_none(self):
+        """Test default marker is returned when config value is None."""
+        self.assertEqual(
+            stale_branch_mr_handler.get_prevent_auto_archive_comment(
+                {'prevent_auto_archive_comment': None}
+            ),
+            stale_branch_mr_handler.DEFAULT_PREVENT_AUTO_ARCHIVE_COMMENT
+        )
+
+    def test_get_prevent_auto_archive_comment_default_when_empty(self):
+        """Test default marker is returned when config value is empty."""
+        self.assertEqual(
+            stale_branch_mr_handler.get_prevent_auto_archive_comment(
+                {'prevent_auto_archive_comment': ''}
+            ),
+            stale_branch_mr_handler.DEFAULT_PREVENT_AUTO_ARCHIVE_COMMENT
+        )
+
+    def test_get_prevent_auto_archive_comment_default_when_whitespace(self):
+        """Test default marker is returned when config value is whitespace."""
+        self.assertEqual(
+            stale_branch_mr_handler.get_prevent_auto_archive_comment(
+                {'prevent_auto_archive_comment': '   '}
+            ),
+            stale_branch_mr_handler.DEFAULT_PREVENT_AUTO_ARCHIVE_COMMENT
+        )
+
+    def test_get_prevent_auto_archive_comment_custom_value(self):
+        """Test trimmed custom marker is returned when configured."""
+        self.assertEqual(
+            stale_branch_mr_handler.get_prevent_auto_archive_comment(
+                {'prevent_auto_archive_comment': '  #keep-open  '}
+            ),
+            '#keep-open'
+        )
+
+    def test_get_auto_archive_opt_out_link_empty_url(self):
+        """Test opt-out link helper returns empty string for empty URL."""
+        self.assertEqual(stale_branch_mr_handler.get_auto_archive_opt_out_link(''), '')
+
+    def test_get_auto_archive_opt_out_link_gitlab(self):
+        """Test GitLab URLs point to notes anchor."""
+        web_url = 'https://gitlab.example.com/group/project/-/merge_requests/42'
+        self.assertEqual(
+            stale_branch_mr_handler.get_auto_archive_opt_out_link(web_url),
+            f'{web_url}#notes'
+        )
+
+    def test_get_auto_archive_opt_out_link_github_com(self):
+        """Test github.com PR URLs point to issue comment anchor."""
+        web_url = 'https://github.com/acme/repo/pull/7'
+        self.assertEqual(
+            stale_branch_mr_handler.get_auto_archive_opt_out_link(web_url),
+            f'{web_url}#issuecomment-new'
+        )
+
+    def test_get_auto_archive_opt_out_link_github_enterprise(self):
+        """Test GitHub Enterprise PR URLs point to issue comment anchor."""
+        web_url = 'https://github.enterprise.local/acme/repo/pull/7'
+        self.assertEqual(
+            stale_branch_mr_handler.get_auto_archive_opt_out_link(web_url),
+            f'{web_url}#issuecomment-new'
+        )
+
+    def test_get_auto_archive_opt_out_link_malformed_url(self):
+        """Test malformed URLs safely fall back to notes anchor."""
+        web_url = 'not a valid url'
+        self.assertEqual(
+            stale_branch_mr_handler.get_auto_archive_opt_out_link(web_url),
+            f'{web_url}#notes'
+        )
+
+    def test_get_auto_archive_opt_out_link_without_pr_pattern(self):
+        """Test non-PR URLs fall back to notes anchor."""
+        web_url = 'https://github.enterprise.local/acme/repo/issues/7'
+        self.assertEqual(
+            stale_branch_mr_handler.get_auto_archive_opt_out_link(web_url),
+            f'{web_url}#notes'
+        )
+
+    def test_get_auto_archive_opt_out_link_non_github_pull_pattern(self):
+        """Test URLs that contain pull segment but not GitHub PR format."""
+        web_url = 'https://example.com/team/project/pull/request'
+        self.assertEqual(
+            stale_branch_mr_handler.get_auto_archive_opt_out_link(web_url),
+            f'{web_url}#notes'
+        )
+
 
 class TestParseDateCommit(unittest.TestCase):
     """Tests for parse_commit_date function."""
@@ -689,6 +800,30 @@ class TestGenerateEmailContentWithMRs(unittest.TestCase):
         self.assertIn('!42', result)
         self.assertIn('Fix feature', result)
         self.assertIn('Stale Merge Requests', result)
+        self.assertIn('#skip-auto-archive', result)
+        self.assertIn('#notes', result)
+
+    def test_generates_html_with_github_opt_out_link(self):
+        """Test that GitHub PR links target the new comment anchor."""
+        merge_requests = [
+            {
+                'project_name': 'Test Repo',
+                'branch_name': 'feature-branch',
+                'iid': 7,
+                'title': 'Fix feature',
+                'web_url': 'https://github.com/acme/repo/pull/7',
+                'last_updated': '2023-01-15 10:00:00',
+                'author_name': 'Test User',
+            }
+        ]
+
+        result = stale_branch_mr_handler.generate_email_content(
+            [], 30, 4, merge_requests, {'prevent_auto_archive_comment': '#keep-open'}
+        )
+
+        self.assertIn('#issuecomment-new', result)
+        self.assertIn('#keep-open', result)
+        self.assertIn('Skip auto-archiving for this item', result)
 
     def test_generates_html_with_both_branches_and_mrs(self):
         """Test email content with both branches and merge requests."""
@@ -1661,6 +1796,88 @@ class TestIsReadyForArchiving(unittest.TestCase):
         self.assertFalse(result)
 
 
+class TestMergeRequestHasOptOutComment(unittest.TestCase):
+    """Tests for merge_request_has_opt_out_comment function."""
+
+    def test_returns_true_when_marker_found_case_insensitive(self):
+        """Test marker matching is case-insensitive."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        mock_note = MagicMock()
+        mock_note.body = "Please keep this open: #SkIp-AuTo-ArChIvE"
+        mock_mr.notes.list.return_value = [mock_note]
+        mock_project.mergerequests.get.return_value = mock_mr
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_mr_handler.merge_request_has_opt_out_comment(
+            mock_gl, {'project_id': 123, 'iid': 42, 'project_name': 'Test'}, '#skip-auto-archive'
+        )
+
+        self.assertTrue(result)
+
+    def test_returns_false_when_marker_missing(self):
+        """Test False is returned when marker is absent."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        mock_note = MagicMock()
+        mock_note.body = "Looks good to archive"
+        mock_mr.notes.list.return_value = [mock_note]
+        mock_project.mergerequests.get.return_value = mock_mr
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_mr_handler.merge_request_has_opt_out_comment(
+            mock_gl, {'project_id': 123, 'iid': 42, 'project_name': 'Test'}, '#skip-auto-archive'
+        )
+
+        self.assertFalse(result)
+
+    def test_returns_false_on_gitlab_api_error(self):
+        """Test API errors are handled gracefully."""
+        mock_gl = MagicMock()
+        mock_gl.projects.get.side_effect = gitlab.exceptions.GitlabError("API Error")
+
+        result = stale_branch_mr_handler.merge_request_has_opt_out_comment(
+            mock_gl, {'project_id': 123, 'iid': 42, 'project_name': 'Test'}, '#skip-auto-archive'
+        )
+
+        self.assertFalse(result)
+
+    def test_returns_false_when_marker_empty(self):
+        """Test empty markers do not trigger opt-out checks."""
+        mock_gl = MagicMock()
+
+        result = stale_branch_mr_handler.merge_request_has_opt_out_comment(
+            mock_gl, {'project_id': 123, 'iid': 42, 'project_name': 'Test'}, '   '
+        )
+
+        self.assertFalse(result)
+        mock_gl.projects.get.assert_not_called()
+
+    def test_only_checks_20_most_recent_notes(self):
+        """Test marker beyond first 20 notes is ignored."""
+        mock_gl = MagicMock()
+        mock_project = MagicMock()
+        mock_mr = MagicMock()
+        notes = []
+        for index in range(25):
+            note = MagicMock()
+            note.body = "No marker here"
+            if index == 21:
+                note.body = "#skip-auto-archive"
+            notes.append(note)
+        mock_mr.notes.list.return_value = notes
+        mock_project.mergerequests.get.return_value = mock_mr
+        mock_gl.projects.get.return_value = mock_project
+
+        result = stale_branch_mr_handler.merge_request_has_opt_out_comment(
+            mock_gl, {'project_id': 123, 'iid': 42, 'project_name': 'Test'}, '#skip-auto-archive'
+        )
+
+        self.assertFalse(result)
+
+
 class TestExportBranchToArchive(unittest.TestCase):
     """Tests for export_branch_to_archive function."""
 
@@ -2057,10 +2274,11 @@ class TestPerformAutomaticArchiving(unittest.TestCase):
     @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
     @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
     @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'merge_request_has_opt_out_comment', return_value=False)
     @patch.object(stale_branch_mr_handler, 'archive_stale_mr')
     @patch.object(stale_branch_mr_handler, 'archive_stale_branch')
     def test_performs_archiving_for_mrs(
-        self, mock_archive_branch, mock_archive_mr, _mock_is_eligible, mock_get_ready, mock_gl
+        self, mock_archive_branch, mock_archive_mr, _mock_opt_out, _mock_is_eligible, mock_get_ready, mock_gl
     ):
         """Test that archiving is performed for MRs."""
         mock_gl.return_value = MagicMock()
@@ -2178,6 +2396,35 @@ class TestPerformAutomaticArchiving(unittest.TestCase):
         self.assertEqual(result['branches_archived'], 0)
         self.assertEqual(result['mrs_archived'], 0)
         mock_archive_branch.assert_not_called()
+        mock_archive_mr.assert_not_called()
+
+    @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
+    @patch.object(stale_branch_mr_handler, 'get_branches_ready_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'merge_request_has_opt_out_comment', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'archive_stale_mr')
+    def test_skips_mr_with_opt_out_comment(
+        self, mock_archive_mr, _mock_opt_out, _mock_is_eligible, mock_get_ready, mock_gl
+    ):
+        """Test that MRs with opt-out comment are skipped from auto-archiving."""
+        mock_gl.return_value = MagicMock()
+        mock_get_ready.return_value = (
+            [],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 123, 'project_name': 'Test'}]
+        )
+
+        config = {
+            'gitlab': {'url': 'https://gitlab.example.com', 'private_token': 'token'},
+            'projects': [123],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['mrs_archived'], 0)
+        self.assertEqual(result['mrs_failed'], 0)
         mock_archive_mr.assert_not_called()
 
     @patch.object(stale_branch_mr_handler, 'create_gitlab_client')
@@ -3503,6 +3750,95 @@ class TestGitHubGetPrLastActivityDate(unittest.TestCase):
 
 
 @unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
+class TestGitHubMergeRequestHasOptOutComment(unittest.TestCase):
+    """Tests for github_merge_request_has_opt_out_comment function."""
+
+    def test_returns_true_when_marker_found_case_insensitive(self):
+        """Test marker matching is case-insensitive."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_pr = MagicMock()
+        mock_comment = MagicMock()
+        mock_comment.body = "Please keep this open: #SkIp-AuTo-ArChIvE"
+        mock_comments = MagicMock()
+        mock_comments.get_page.return_value = [mock_comment]
+        mock_pr.get_issue_comments.return_value = mock_comments
+        mock_repo.get_pull.return_value = mock_pr
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_merge_request_has_opt_out_comment(
+            mock_gh, {'project_id': 'owner/repo', 'iid': 42, 'project_name': 'Test'}, '#skip-auto-archive'
+        )
+
+        self.assertTrue(result)
+
+    def test_returns_false_when_marker_missing(self):
+        """Test False is returned when marker is absent."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_pr = MagicMock()
+        mock_comment = MagicMock()
+        mock_comment.body = "Looks good to archive"
+        mock_comments = MagicMock()
+        mock_comments.get_page.return_value = [mock_comment]
+        mock_pr.get_issue_comments.return_value = mock_comments
+        mock_repo.get_pull.return_value = mock_pr
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_merge_request_has_opt_out_comment(
+            mock_gh, {'project_id': 'owner/repo', 'iid': 42, 'project_name': 'Test'}, '#skip-auto-archive'
+        )
+
+        self.assertFalse(result)
+
+    def test_returns_false_on_github_api_error(self):
+        """Test API errors are handled gracefully."""
+        mock_gh = MagicMock()
+        mock_gh.get_repo.side_effect = GithubException(500, "Server Error", None)
+
+        result = stale_branch_mr_handler.github_merge_request_has_opt_out_comment(
+            mock_gh, {'project_id': 'owner/repo', 'iid': 42, 'project_name': 'Test'}, '#skip-auto-archive'
+        )
+
+        self.assertFalse(result)
+
+    def test_returns_false_when_marker_empty(self):
+        """Test empty markers do not trigger opt-out checks."""
+        mock_gh = MagicMock()
+
+        result = stale_branch_mr_handler.github_merge_request_has_opt_out_comment(
+            mock_gh, {'project_id': 'owner/repo', 'iid': 42, 'project_name': 'Test'}, '   '
+        )
+
+        self.assertFalse(result)
+        mock_gh.get_repo.assert_not_called()
+
+    def test_only_checks_20_most_recent_comments(self):
+        """Test marker beyond first 20 comments is ignored."""
+        mock_gh = MagicMock()
+        mock_repo = MagicMock()
+        mock_pr = MagicMock()
+        comments = []
+        for index in range(25):
+            comment = MagicMock()
+            comment.body = "No marker here"
+            if index == 21:
+                comment.body = "#skip-auto-archive"
+            comments.append(comment)
+        mock_comments = MagicMock()
+        mock_comments.get_page.return_value = comments
+        mock_pr.get_issue_comments.return_value = mock_comments
+        mock_repo.get_pull.return_value = mock_pr
+        mock_gh.get_repo.return_value = mock_repo
+
+        result = stale_branch_mr_handler.github_merge_request_has_opt_out_comment(
+            mock_gh, {'project_id': 'owner/repo', 'iid': 42, 'project_name': 'Test'}, '#skip-auto-archive'
+        )
+
+        self.assertFalse(result)
+
+
+@unittest.skipIf(not HAS_GITHUB, "PyGithub not installed")
 class TestGitHubExportBranchToArchive(unittest.TestCase):
     """Tests for github_export_branch_to_archive function."""
 
@@ -3603,11 +3939,12 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
     @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_merge_request_has_opt_out_comment', return_value=False)
     @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
     @patch.object(stale_branch_mr_handler, 'github_delete_branch')
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
     def test_archives_prs_in_dry_run(
-        self, mock_export, mock_delete, mock_close, _mock_is_eligible, mock_process, mock_gh
+        self, mock_export, mock_delete, mock_close, _mock_opt_out, _mock_is_eligible, mock_process, mock_gh
     ):
         """Test that dry run mode logs but doesn't perform actual operations."""
         mock_gh.return_value = MagicMock()
@@ -3634,11 +3971,12 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
     @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_merge_request_has_opt_out_comment', return_value=False)
     @patch.object(stale_branch_mr_handler, 'github_close_merge_request')
     @patch.object(stale_branch_mr_handler, 'github_delete_branch')
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
     def test_archives_prs_real_mode(
-        self, mock_export, mock_delete, mock_close, _mock_is_eligible, mock_process, mock_gh
+        self, mock_export, mock_delete, mock_close, _mock_opt_out, _mock_is_eligible, mock_process, mock_gh
     ):
         """Test that real mode performs archiving operations for PRs."""
         mock_gh.return_value = MagicMock()
@@ -3774,9 +4112,10 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
     @patch.object(stale_branch_mr_handler, 'create_github_client')
     @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
     @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_merge_request_has_opt_out_comment', return_value=False)
     @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
     def test_counts_failure_when_export_fails(
-        self, mock_export, _mock_is_eligible, mock_process, mock_gh
+        self, mock_export, _mock_opt_out, _mock_is_eligible, mock_process, mock_gh
     ):
         """Test that failed export is counted as failure."""
         mock_gh.return_value = MagicMock()
@@ -3799,6 +4138,36 @@ class TestGitHubPerformAutomaticArchiving(unittest.TestCase):
 
         self.assertEqual(result['mrs_archived'], 0)
         self.assertEqual(result['mrs_failed'], 1)
+
+    @patch.object(stale_branch_mr_handler, 'create_github_client')
+    @patch.object(stale_branch_mr_handler, '_github_process_project_for_archiving')
+    @patch.object(stale_branch_mr_handler, 'is_eligible_for_auto_archive', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_merge_request_has_opt_out_comment', return_value=True)
+    @patch.object(stale_branch_mr_handler, 'github_export_branch_to_archive')
+    def test_skips_pr_with_opt_out_comment(
+        self, mock_export, _mock_opt_out, _mock_is_eligible, mock_process, mock_gh
+    ):
+        """Test that PRs with opt-out comment are skipped from auto-archiving."""
+        mock_gh.return_value = MagicMock()
+        mock_process.return_value = (
+            [],
+            [{'iid': 42, 'branch_name': 'feature', 'project_id': 'owner/repo', 'project_name': 'Test'}]
+        )
+
+        config = {
+            'platform': 'github',
+            'github': {'token': 'ghp_test'},
+            'projects': ['owner/repo'],
+            'stale_days': 30,
+            'cleanup_weeks': 4,
+            'archive_folder': self.temp_dir,
+        }
+
+        result = stale_branch_mr_handler.github_perform_automatic_archiving(config, dry_run=False)
+
+        self.assertEqual(result['mrs_archived'], 0)
+        self.assertEqual(result['mrs_failed'], 0)
+        mock_export.assert_not_called()
 
 
 if __name__ == '__main__':

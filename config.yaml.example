@@ -156,6 +156,11 @@ archive_folder: "./archived_branches"
 #   - 123                  # GitLab example
 #   - "myorg/config-repo"  # GitHub example
 
+# Optional comment marker that disables auto-archiving for a specific MR/PR.
+# Add this marker in an MR/PR comment to keep it open while email alerts continue.
+# Default: "#skip-auto-archive"
+# prevent_auto_archive_comment: "#skip-auto-archive"
+
 # =============================================================================
 # MR Reminder Comments Settings
 # =============================================================================
