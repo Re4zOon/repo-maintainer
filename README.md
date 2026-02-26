@@ -2,6 +2,14 @@
 
 A Python script that identifies stale branches and merge/pull requests in GitLab and GitHub projects, sends email notifications to their owners about upcoming cleanup, and can automatically archive very old stale items.
 
+## Quick Links
+
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [WebUI Guide (with screenshots)](docs/webui.md)
+- [Docker Deployment](#docker-deployment)
+
 ## Supported Platforms
 
 - **GitLab** (via python-gitlab) — uses project IDs
@@ -229,12 +237,13 @@ The comments are designed to be clear and encourage action while keeping things 
 
 ## WebUI for Monitoring and Configuration
 
-The tool includes a web-based interface for monitoring statistics and managing configuration. The WebUI provides:
+The tool includes a web-based interface for monitoring statistics and managing configuration.
 
-- **Dashboard** with real-time statistics on notifications and MR comments
-- **Configuration management** to update settings without editing files
-- **Dark mode** support for comfortable viewing
-- **Responsive design** that works on desktop and mobile
+See the dedicated **[WebUI Guide](docs/webui.md)** for:
+- Feature walkthrough
+- API endpoint overview
+- Environment variables
+- Full-page screenshots (dashboard, dark mode, and configuration editor)
 
 ### Running the WebUI
 
@@ -283,42 +292,7 @@ python -m webui.app -c config.yaml --port 8080
 python -m webui.app -c config.yaml --debug
 ```
 
-### WebUI Features
-
-#### Dashboard
-- Total notifications sent (branches and MRs)
-- MR comments posted
-- Current configuration summary
-- Recent notification history
-- Export statistics as JSON
-
-#### Configuration
-- Update stale detection settings
-- Configure notification frequency
-- Enable/disable auto-archive and MR comments
-- Manage monitored projects
-
-Note: Sensitive settings (API tokens, passwords) cannot be modified through the WebUI for security reasons.
-
-### WebUI API Endpoints
-
-| Endpoint | Method | Auth | Description |
-|----------|--------|------|-------------|
-| `/api/health` | GET | No | Health check |
-| `/api/stats` | GET | Yes | Get statistics |
-| `/api/config` | GET | Yes | Get configuration (sanitized) |
-| `/api/config` | PUT | Yes | Update configuration |
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WEBUI_HOST` | Docker: `0.0.0.0` (local: `127.0.0.1`) | Host to bind the server |
-| `WEBUI_PORT` | `5000` | Port for the WebUI |
-| `WEBUI_USERNAME` | `admin` | Username for authentication (default for local runs; Docker deployments must set this explicitly) |
-| `WEBUI_PASSWORD` | `admin` | Password for authentication (default for local runs; Docker deployments must set this explicitly) |
-| `WEBUI_SECRET_KEY` | - | Secret key for sessions (auto-generated if not set) |
-| `CONFIG_PATH` | `config.yaml` | Path to config file |
+Note: For security, sensitive settings (API tokens and passwords) remain read-only in the WebUI.
 
 ## Docker Deployment
 
