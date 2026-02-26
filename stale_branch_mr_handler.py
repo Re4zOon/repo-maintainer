@@ -493,6 +493,69 @@ def get_last_notification_date(
     return None
 
 
+def get_first_notification_date_for_item(
+    db_path: str,
+    item_type: str,
+    project_id: Union[int, str],
+    item_key: str
+) -> Optional[datetime]:
+    """
+    Get the first notification date recorded for an item across all recipients.
+
+    Args:
+        db_path: Path to the SQLite database file
+        item_type: Type of item ('branch' or 'merge_request')
+        project_id: Project identifier (GitLab numeric ID or GitHub "owner/repo" string)
+        item_key: Unique key for the item (branch name or MR iid)
+
+    Returns:
+        datetime of first notification or None if never notified
+    """
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT MIN(first_found_at) FROM notification_history
+            WHERE item_type = ? AND project_id = ? AND item_key = ?
+        ''', (item_type, project_id, str(item_key)))
+
+        row = cursor.fetchone()
+
+    if row and row[0]:
+        return datetime.fromisoformat(row[0])
+    return None
+
+
+def is_eligible_for_auto_archive(
+    db_path: str,
+    item_type: str,
+    project_id: Union[int, str],
+    item_key: str,
+    cleanup_weeks: int
+) -> bool:
+    """
+    Check if an item has been notified and completed the cleanup waiting period.
+
+    Args:
+        db_path: Path to the SQLite database file
+        item_type: Type of item ('branch' or 'merge_request')
+        project_id: Project identifier (GitLab numeric ID or GitHub "owner/repo" string)
+        item_key: Unique key for the item (branch name or MR iid)
+        cleanup_weeks: Number of weeks to wait after first notification
+
+    Returns:
+        True if item can be auto-archived, otherwise False
+    """
+    first_notified_at = get_first_notification_date_for_item(
+        db_path, item_type, project_id, item_key
+    )
+    if first_notified_at is None:
+        return False
+
+    cutoff = datetime.now(timezone.utc) - timedelta(weeks=cleanup_weeks)
+    return first_notified_at <= cutoff
+
+
 def record_notification(
     db_path: str,
     recipient_email: str,
@@ -1949,6 +2012,7 @@ def perform_automatic_archiving(config: dict, dry_run: bool = False) -> dict:
     gl = create_gitlab_client(config)
 
     archive_folder = config.get('archive_folder', DEFAULT_ARCHIVE_FOLDER)
+    db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
     archive_projects = config.get('auto_archive_projects')
@@ -1969,7 +2033,21 @@ def perform_automatic_archiving(config: dict, dry_run: bool = False) -> dict:
 
     archiving_config = dict(config)
     archiving_config['projects'] = archive_projects
+    init_database(db_path)
     branches_to_archive, mrs_to_archive = get_branches_ready_for_archiving(gl, archiving_config)
+
+    branches_to_archive = [
+        branch for branch in branches_to_archive
+        if is_eligible_for_auto_archive(
+            db_path, 'branch', branch['project_id'], branch['branch_name'], cleanup_weeks
+        )
+    ]
+    mrs_to_archive = [
+        mr for mr in mrs_to_archive
+        if is_eligible_for_auto_archive(
+            db_path, 'merge_request', mr['project_id'], mr['iid'], cleanup_weeks
+        )
+    ]
 
     logger.info(
         f"Found {len(branches_to_archive)} branches and {len(mrs_to_archive)} MRs "
@@ -3276,6 +3354,7 @@ def github_perform_automatic_archiving(config: dict, dry_run: bool = False) -> d
     gh = create_github_client(config)
 
     archive_folder = config.get('archive_folder', DEFAULT_ARCHIVE_FOLDER)
+    db_path = config.get('database_path', DEFAULT_DATABASE_PATH)
     stale_days = config.get('stale_days', 30)
     cleanup_weeks = config.get('cleanup_weeks', 4)
     repo_names = config.get('auto_archive_projects')
@@ -3297,6 +3376,7 @@ def github_perform_automatic_archiving(config: dict, dry_run: bool = False) -> d
 
     all_branches_to_archive = []
     all_prs_to_archive = []
+    init_database(db_path)
 
     # Note: PyGithub uses the requests library which is generally thread-safe for read operations.
     # The shared GitHub client (gh) is used across threads for API calls.
@@ -3318,6 +3398,19 @@ def github_perform_automatic_archiving(config: dict, dry_run: bool = False) -> d
                 all_prs_to_archive.extend(prs)
             except Exception as e:
                 logger.error(f"Error processing repo {repo_name} for archiving: {e}")
+
+    all_branches_to_archive = [
+        branch for branch in all_branches_to_archive
+        if is_eligible_for_auto_archive(
+            db_path, 'branch', branch['project_id'], branch['branch_name'], cleanup_weeks
+        )
+    ]
+    all_prs_to_archive = [
+        pr for pr in all_prs_to_archive
+        if is_eligible_for_auto_archive(
+            db_path, 'merge_request', pr['project_id'], pr['iid'], cleanup_weeks
+        )
+    ]
 
     logger.info(
         f"Found {len(all_branches_to_archive)} branches and {len(all_prs_to_archive)} PRs "
