@@ -7,6 +7,8 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       # Mount data directory for database persistence
       - ./data:/app/data
+      # Mount archive directory for exported branch archives
+      - ./archived_branches:/app/archived_branches
     restart: "no"
 
   # WebUI service for monitoring and configuration
@@ -30,6 +32,8 @@ services:
       # Concurrent access is expected and relies on the application/database
       # to provide appropriate locking or transactional guarantees.
       - ./data:/app/data
+      # Mount archive directory to keep archive path consistent with CLI service.
+      - ./archived_branches:/app/archived_branches
     environment:
       - WEBUI_PORT=5000
       - CONFIG_PATH=/app/config.yaml

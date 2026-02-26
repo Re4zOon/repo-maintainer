@@ -330,9 +330,9 @@ Note: Sensitive settings (API tokens, passwords) cannot be modified through the 
    # Edit config.yaml with your settings
    ```
 
-2. Create a data directory for the notification database:
+2. Create directories for the notification database and branch archives:
    ```bash
-   mkdir -p data
+   mkdir -p data archived_branches
    ```
 
 3. Run the container:
@@ -371,6 +371,7 @@ docker build -t repo-maintainer .
 docker run --rm \
   -v ./config.yaml:/app/config.yaml:ro \
   -v ./data:/app/data \
+  -v ./archived_branches:/app/archived_branches \
   repo-maintainer
 ```
 
